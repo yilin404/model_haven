@@ -471,7 +471,6 @@ def main():
         port=args.port,
         model_name=args.model,
         gpu_id=args.gpu_id,
-        timeout=args.timeout,
         recv_timeout=args.recv_timeout,
     )
 

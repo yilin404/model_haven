@@ -1,0 +1,9 @@
+[submodule "deps/trellis"]
+	path = deps/trellis
+	url = https://github.com/microsoft/TRELLIS.git
+[submodule "deps/vggt"]
+	path = deps/vggt
+	url = https://github.com/facebookresearch/vggt.git
+[submodule "deps/hamer"]
+	path = deps/hamer
+	url = https://github.com/geopavlakos/hamer.git

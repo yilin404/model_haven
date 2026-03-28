@@ -7,3 +7,6 @@
 [submodule "deps/hamer"]
 	path = deps/hamer
 	url = https://github.com/geopavlakos/hamer.git
+[submodule "deps/GraspGen"]
+	path = deps/graspgen
+	url = https://github.com/NVlabs/GraspGen.git

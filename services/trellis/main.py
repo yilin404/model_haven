@@ -79,7 +79,7 @@ class TrellisTextTo3DZMQServer:
         self.gpu_id = gpu_id
         self.recv_timeout = recv_timeout
 
-        # Initialize ZMQ context and socket
+        # ZMQ context and socket
         self.context: Optional[zmq.Context] = None
         self.socket: Optional[zmq.Socket] = None
 
@@ -423,13 +423,13 @@ def main():
     )
 
     parser.add_argument(
-        "--port", type=int, default=DEFAULT_PORT, help="ZMQ port to listen on"
-    )
-    parser.add_argument(
         "--host",
         type=str,
         default=DEFAULT_HOST,
         help="Host to bind to (* for all interfaces)",
+    )
+    parser.add_argument(
+        "--port", type=int, default=DEFAULT_PORT, help="ZMQ port to listen on"
     )
     parser.add_argument(
         "--gpu-id", type=int, default=DEFAULT_GPU_ID, help="GPU device ID to use"

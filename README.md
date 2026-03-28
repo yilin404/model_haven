@@ -140,8 +140,9 @@ class XxxZMQServer:
 def main():
     """Main entry point for the ZMQ server."""
     parser = argparse.ArgumentParser(description="Xxx ZMQ Server")
-    parser.add_argument("--port", type=int, default=5555)
+
     parser.add_argument("--host", type=str, default="*")
+    parser.add_argument("--port", type=int, default=5555)
     parser.add_argument("--gpu", type=int, default=0)
     args = parser.parse_args()
 

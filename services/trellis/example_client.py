@@ -104,7 +104,6 @@ def main():
     )
 
     parser.add_argument("--host", type=str, default="localhost", help="Server host")
-
     parser.add_argument("--port", type=int, default=5555, help="Server port")
 
     parser.add_argument(
@@ -113,7 +112,6 @@ def main():
         default="A modern chair with wooden legs",
         help="Text prompt for 3D generation",
     )
-
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
     parser.add_argument(

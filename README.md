@@ -169,3 +169,93 @@ if __name__ == "__main__":
 4. 编写 `setup.bash` 安装脚本
 5. 实现 `XxxZMQServer` 类
 6. 编写 `README.md` 说明文档
+
+## 服务列表
+
+### TRELLIS — Text-to-3D 生成服务
+
+基于 [Microsoft TRELLIS](https://github.com/microsoft/TRELLIS) 的文本生成 3D 模型服务，接收文本描述，返回 GLB 格式的 3D 模型。
+
+**环境要求：** NVIDIA GPU + CUDA 12.8
+
+#### 安装
+
+```bash
+cd services/trellis
+bash setup.bash          # 一键安装 uv 虚拟环境及所有依赖（含 PyTorch、xformers、Flash-Attention 等）
+```
+
+> `setup.bash` 会自动安装 PyTorch (cu128)、TRELLIS 及其全部扩展依赖（nvdiffrast、diffoctreerast、spconv 等），编译耗时较长，请耐心等待。
+
+#### 启动服务
+
+```bash
+# 默认配置：监听 *:5555，使用 GPU 0
+uv run main.py
+
+# 自定义配置
+uv run main.py --host 0.0.0.0 --port 6000 --gpu-id 1 --model microsoft/TRELLIS-text-xlarge
+
+# 查看所有参数
+uv run main.py --help
+```
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--host` | `*` | ZMQ 绑定地址 |
+| `--port` | `5555` | ZMQ 监听端口 |
+| `--gpu-id` | `0` | GPU 设备 ID |
+| `--recv-timeout` | `5000` | ZMQ 接收超时 (ms) |
+| `--model` | `microsoft/TRELLIS-text-xlarge` | HuggingFace 模型标识 |
+| `--log-level` | `INFO` | 日志级别 |
+
+#### 请求协议
+
+客户端通过 ZMQ REQ/REP 模式发送 JSON 请求，服务端返回 JSON 响应。
+
+**请求格式：**
+
+```json
+{
+  "text": "A modern chair with wooden legs",
+  "seed": 42,
+  "options": {
+    "simplify": 0.95,
+    "texture_size": 1024
+  }
+}
+```
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `text` | 是 | 文本描述提示词 |
+| `seed` | 否 | 随机种子（整数） |
+| `options.simplify` | 否 | 网格简化比例，0~1，默认 0.95 |
+| `options.texture_size` | 否 | 纹理分辨率，正整数，默认 1024 |
+
+**成功响应：**
+
+```json
+{
+  "status": "success",
+  "glb_data": "<base64 编码的 GLB 文件>",
+  "metadata": {
+    "prompt": "A modern chair with wooden legs",
+    "seed": 42,
+    "generation_time": 12.34,
+    "file_size": 524288,
+    "simplify": 0.95,
+    "texture_size": 1024
+  }
+}
+```
+
+**错误响应：**
+
+```json
+{
+  "status": "error",
+  "error": "错误描述",
+  "error_type": "ValueError"
+}
+```

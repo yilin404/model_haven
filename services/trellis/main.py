@@ -84,9 +84,7 @@ class TextTo3DRequest(BaseModel):
 class ImageTo3DRequest(BaseModel):
     """Request body for image-to-3D generation."""
 
-    image: str = Field(
-        ..., description="Base64-encoded image string"
-    )
+    image: str = Field(..., description="Base64-encoded image string")
 
     seed: Optional[int] = Field(default=None, description="Random seed")
     options: Optional[ImageTo3DOptions] = None
@@ -277,7 +275,7 @@ class TrellisServer:
         @self._app.post("/text-to-3d", response_model=GenerationResponse)
         async def text_to_3d(request: TextTo3DRequest):
             """Generate a 3D model from a text prompt."""
-            self._text_last_activity = time.monotonic()
+            self._text_last_activity = time.monotonic()  # update activity timestamp immediately to prevent idle unload during generation
             await self._ensure_text_pipeline_loaded()
 
             async with self._text_inference_lock:
@@ -288,7 +286,9 @@ class TrellisServer:
                     options=request.options,
                 )
 
-            self._text_last_activity = time.monotonic()
+            self._text_last_activity = (
+                time.monotonic()
+            )  # update activity timestamp after generation completes
 
             if result["status"] == "error":
                 raise HTTPException(status_code=500, detail=result)
@@ -298,7 +298,7 @@ class TrellisServer:
         @self._app.post("/image-to-3d", response_model=GenerationResponse)
         async def image_to_3d(request: ImageTo3DRequest):
             """Generate a 3D model from an image."""
-            self._image_last_activity = time.monotonic()
+            self._image_last_activity = time.monotonic()  # update activity timestamp immediately to prevent idle unload during generation
             await self._ensure_image_pipeline_loaded()
 
             # image is already decoded to PIL.Image by field_validator
@@ -312,7 +312,9 @@ class TrellisServer:
                     options=request.options,
                 )
 
-            self._image_last_activity = time.monotonic()
+            self._image_last_activity = (
+                time.monotonic()
+            )  # update activity timestamp after generation completes
 
             if result["status"] == "error":
                 raise HTTPException(status_code=500, detail=result)
@@ -359,7 +361,9 @@ class TrellisServer:
             )
             self.text_pipeline.to(f"cuda:{self._text_gpu_id}")
 
-            logger.info(f"Text-to-3D pipeline loaded in {time.time() - start_time:.2f}s")
+            logger.info(
+                f"Text-to-3D pipeline loaded in {time.time() - start_time:.2f}s"
+            )
         except Exception as e:
             self._text_gpu_id = None
             logger.error(f"Failed to load text pipeline: {e}")
@@ -377,7 +381,9 @@ class TrellisServer:
             )
             self.image_pipeline.to(f"cuda:{self._image_gpu_id}")
 
-            logger.info(f"Image-to-3D pipeline loaded in {time.time() - start_time:.2f}s")
+            logger.info(
+                f"Image-to-3D pipeline loaded in {time.time() - start_time:.2f}s"
+            )
         except Exception as e:
             self._image_gpu_id = None
             logger.error(f"Failed to load image pipeline: {e}")
@@ -393,7 +399,6 @@ class TrellisServer:
         self._text_gpu_id = None
 
         if gpu_id is not None:
-            torch.cuda.set_device(gpu_id)
             mem_before = torch.cuda.memory_allocated(gpu_id) / (1024**3)
 
         del self.text_pipeline
@@ -417,7 +422,6 @@ class TrellisServer:
         self._image_gpu_id = None
 
         if gpu_id is not None:
-            torch.cuda.set_device(gpu_id)
             mem_before = torch.cuda.memory_allocated(gpu_id) / (1024**3)
 
         del self.image_pipeline
@@ -436,12 +440,10 @@ class TrellisServer:
     # ----------------------------------------------------------------
     async def _ensure_text_pipeline_loaded(self) -> None:
         """Ensure the text pipeline is loaded, loading on demand if needed."""
-        if self._text_pipeline_state == PipelineState.LOADED:
-            return
-
         async with self._text_state_lock:
             if self._text_pipeline_state == PipelineState.LOADED:
                 return
+
             logger.info(f"[text-pipeline] {self._text_pipeline_state.value} -> LOADING")
             self._text_pipeline_state = PipelineState.LOADING
             try:
@@ -458,12 +460,10 @@ class TrellisServer:
 
     async def _ensure_image_pipeline_loaded(self) -> None:
         """Ensure the image pipeline is loaded, loading on demand if needed."""
-        if self._image_pipeline_state == PipelineState.LOADED:
-            return
-
         async with self._image_state_lock:
             if self._image_pipeline_state == PipelineState.LOADED:
                 return
+
             logger.info(
                 f"[image-pipeline] {self._image_pipeline_state.value} -> LOADING"
             )
@@ -495,10 +495,11 @@ class TrellisServer:
                     elapsed = now - self._text_last_activity
                     if elapsed > self.idle_timeout:
                         async with self._text_state_lock:
-                            if self._text_pipeline_state == PipelineState.LOADED:
-                                if self._text_inference_lock.locked():
-                                    continue
+                            can_unload = (
+                                self._text_pipeline_state == PipelineState.LOADED
+                            ) and not self._text_inference_lock.locked()
 
+                            if can_unload:
                                 logger.info(
                                     f"[text-pipeline] Idle timeout ({elapsed:.0f}s), unloading"
                                 )
@@ -510,10 +511,11 @@ class TrellisServer:
                     elapsed = now - self._image_last_activity
                     if elapsed > self.idle_timeout:
                         async with self._image_state_lock:
-                            if self._image_pipeline_state == PipelineState.LOADED:
-                                if self._image_inference_lock.locked():
-                                    continue
+                            can_unload = (
+                                self._image_pipeline_state == PipelineState.LOADED
+                            ) and not self._image_inference_lock.locked()
 
+                            if can_unload:
                                 logger.info(
                                     f"[image-pipeline] Idle timeout ({elapsed:.0f}s), unloading"
                                 )

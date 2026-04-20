@@ -227,7 +227,7 @@ class SDXLServer:
         @self._app.post("/text-to-image", response_model=ImageResponse)
         async def text_to_image(request: TextToImageRequest):
             """Generate image(s) from a text prompt."""
-            self._last_activity = time.monotonic()
+            self._last_activity = time.monotonic()  # update activity timestamp immediately to prevent idle unload during generation
             await self._ensure_model_loaded()
 
             async with self._inference_lock:
@@ -238,7 +238,9 @@ class SDXLServer:
                     options=request.options,
                 )
 
-            self._last_activity = time.monotonic()
+            self._last_activity = (
+                time.monotonic()
+            )  # update activity timestamp after generation completes
 
             if result["status"] == "error":
                 raise HTTPException(status_code=500, detail=result)
@@ -306,7 +308,6 @@ class SDXLServer:
         self._gpu_id = None
 
         if gpu_id is not None:
-            torch.cuda.set_device(gpu_id)
             mem_before = torch.cuda.memory_allocated(gpu_id) / (1024**3)
 
         del self.pipeline
@@ -325,12 +326,10 @@ class SDXLServer:
     # ----------------------------------------------------------------
     async def _ensure_model_loaded(self) -> None:
         """Ensure the model is loaded, loading on demand if needed (double-check locking)."""
-        if self._model_state == ModelState.LOADED:
-            return
-
         async with self._state_lock:
             if self._model_state == ModelState.LOADED:
                 return
+
             logger.info(f"[model] {self._model_state.value} -> LOADING")
             self._model_state = ModelState.LOADING
             try:
@@ -360,10 +359,11 @@ class SDXLServer:
                     elapsed = now - self._last_activity
                     if elapsed > self.idle_timeout:
                         async with self._state_lock:
-                            if self._model_state == ModelState.LOADED:
-                                if self._inference_lock.locked():
-                                    continue
+                            can_unload = (
+                                self._model_state == ModelState.LOADED
+                            ) and not self._inference_lock.locked()
 
+                            if can_unload:
                                 logger.info(
                                     f"[model] Idle timeout ({elapsed:.0f}s), unloading"
                                 )
@@ -391,10 +391,6 @@ class SDXLServer:
 
         Returns a dict matching ImageResponse fields.
         """
-        # Ensure correct CUDA device before inference
-        if self._gpu_id is not None:
-            torch.cuda.set_device(self._gpu_id)
-
         options = options or TextToImageOptions()
 
         logger.info(
@@ -407,7 +403,7 @@ class SDXLServer:
 
         try:
             generator = (
-                torch.Generator("cuda").manual_seed(seed) if seed is not None else None
+                torch.Generator(f"cuda:{self._gpu_id}").manual_seed(seed) if seed is not None else None
             )
 
             output = self.pipeline(

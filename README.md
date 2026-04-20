@@ -1,15 +1,18 @@
 # Model Haven
 
-AI 模型服务聚合仓库，通过 ZMQ 协议提供统一的模型推理服务接口。
+AI 模型服务聚合仓库，通过 FastAPI 提供 RESTful 模型推理服务接口。
 
 ## 项目结构
 
 ```
 model_haven/
 ├── deps/           # Git submodule 依赖库
-│   └── ...         # 模型依赖
-└── services/       # ZMQ 服务项目
-    └── ...         # 可扩展模型服务
+│   ├── graspgen/   # NVlabs/GraspGen (6-DOF 抓取生成)
+│   └── trellis/    # microsoft/TRELLIS (文本/图像 → 3D)
+└── services/       # FastAPI 模型服务
+    ├── graspgen/       # 6-DOF 抓取生成服务
+    ├── trellis/        # 文本/图像 → 3D 生成服务
+    └── huggingface/    # HuggingFace 模型服务 (SDXL 等)
 ```
 
 ## 依赖管理 (deps)
@@ -32,16 +35,15 @@ git submodule update --init --recursive
 
 ## 服务项目结构 (services)
 
-每个 server project 目录包含以下文件：
+每个服务目录包含以下文件：
 
 ```
 services/<project_name>/
-├── main.py            # ZMQ Server 主程序
+├── main.py            # FastAPI Server 主程序
 ├── setup.bash         # uv 环境安装脚本
 ├── pyproject.toml     # uv 项目配置
 ├── uv.lock            # uv 锁文件
 ├── .python-version    # Python 版本 (如 3.11)
-├── README.md          # 服务说明文档
 └── example_client.py  # (可选) 客户端示例代码
 ```
 
@@ -55,98 +57,77 @@ cd services/<project_name>
 bash setup.bash
 
 # 2. 启动服务 (uv run 自动激活虚拟环境)
-uv run main.py --port <port> --gpu <gpu_id>
+uv run main.py --host 0.0.0.0 --port <port>
 ```
+
+### 通用特性
+
+所有服务共享以下特性：
+
+- **自动 GPU 选择** — 选择空闲显存最多的 GPU
+- **懒加载** — 首次请求时才加载模型，减少启动时间
+- **空闲超时卸载** — 长时间无请求自动卸载模型，释放 GPU 显存
+- **线程安全推理** — 通过 asyncio Lock 序列化推理请求
+- **健康检查** — `GET /health` 端点查看模型状态和 GPU 信息
 
 ---
 
-## ZMQServer 类书写规范
+## FastAPI Server 类书写规范
 
-所有 `main.py` 中的 ZMQ Server 类应遵循以下接口规范：
+所有 `main.py` 中的 Server 类应遵循以下接口规范：
 
 ### 必需接口
 
 ```python
-class XxxZMQServer:
+class XxxServer:
     def __init__(
         self,
-        host: str = "*",
-        port: int = 5555,
-        gpu_id: int = 0,
-        recv_timeout: int = 5000,
+        host: str = "0.0.0.0",
+        port: int = 8000,
+        idle_timeout: int = 300,
+        idle_check_interval: int = 30,
     ):
         """Initialize the server.
 
         Args:
-            host: Host to bind to ("*" for all interfaces)
-            port: ZMQ port to listen on
-            gpu_id: GPU device ID (-1 for CPU)
-            recv_timeout: ZMQ receive timeout in milliseconds
+            host: Host to bind to
+            port: Port to listen on
+            idle_timeout: Seconds before idle model unload (must be > 0)
+            idle_check_interval: Seconds between idle checks (must be > 0)
         """
-        self.host = host
-        self.port = port
-        self.gpu_id = gpu_id
-        self.recv_timeout = recv_timeout
+        # Model state management
+        self._model_state: ModelState = ModelState.NOT_LOADED
+        self._state_lock = asyncio.Lock()
+        self._inference_lock = asyncio.Lock()
+        self._last_activity: float = time.monotonic()
+        self._gpu_id: Optional[int] = None
 
-        # ZMQ context and socket
-        self.context: Optional[zmq.Context] = None
-        self.socket: Optional[zmq.Socket] = None
+        # FastAPI app with lifespan for idle monitor
+        self._app = FastAPI(title="...", lifespan=lifespan)
+        self._register_routes()
 
-    def handle_request(self, request_json: str) -> str:
-        """Process a single JSON request.
-
-        Args:
-            request_json: JSON string containing the request
-
-        Returns:
-            JSON string containing the response
-        """
-        # 实现请求处理逻辑...
-        pass
+    def _register_routes(self) -> None:
+        """Register FastAPI routes (health, inference endpoints)."""
+        ...
 
     def start(self) -> None:
-        """Start the ZMQ server and begin processing requests.
-
-        This method blocks until the server is stopped.
-        """
-        # 创建 ZMQ context 和 REP socket
-        self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.REP)
-        self.socket.setsockopt(zmq.RCVTIMEO, self.recv_timeout)
-        self.socket.bind(f"tcp://{self.host}:{self.port}")
-
-        # 请求处理循环
-        try:
-            while True:
-                try:
-                    request_json = self.socket.recv_string()
-                    response_json = self.handle_request(request_json)
-                    self.socket.send_string(response_json)
-                except zmq.Again:
-                    continue
-                except KeyboardInterrupt:
-                    break
-        finally:
-            self.stop()
-
-    def stop(self) -> None:
-        """Stop the ZMQ server and cleanup resources."""
-        if self.socket:
-            self.socket.close()
-        if self.context:
-            self.context.term()
+        """Start the FastAPI server using uvicorn."""
+        uvicorn.run(self._app, host=self.host, port=self.port, log_level="info")
 
 
 def main():
-    """Main entry point for the ZMQ server."""
-    parser = argparse.ArgumentParser(description="Xxx ZMQ Server")
+    """Main entry point for the FastAPI server."""
+    parser = argparse.ArgumentParser(description="Xxx FastAPI Server")
 
-    parser.add_argument("--host", type=str, default="*")
-    parser.add_argument("--port", type=int, default=5555)
-    parser.add_argument("--gpu", type=int, default=0)
+    parser.add_argument("--host", type=str, default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--idle-timeout", type=int, default=300)
+    parser.add_argument("--idle-check-interval", type=int, default=30)
+    parser.add_argument("--log-level", type=str, default="INFO",
+                        choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
 
-    server = XxxZMQServer(host=args.host, port=args.port, gpu_id=args.gpu)
+    server = XxxServer(host=args.host, port=args.port, ...)
     try:
         server.start()
     except KeyboardInterrupt:
@@ -167,22 +148,97 @@ if __name__ == "__main__":
 2. 添加依赖: `git submodule add <url> deps/<dep_name>`
 3. 创建文件结构（参考上方规范）
 4. 编写 `setup.bash` 安装脚本
-5. 实现 `XxxZMQServer` 类
-6. 编写 `README.md` 说明文档
+5. 实现 Server 类（继承通用模式：懒加载、空闲卸载、健康检查）
+6. 编写 `example_client.py` 示例客户端
 
 ## 服务列表
 
-### TRELLIS — Text-to-3D 生成服务
+### GraspGen — 6-DOF 抓取生成服务
 
-基于 [Microsoft TRELLIS](https://github.com/microsoft/TRELLIS) 的文本生成 3D 模型服务，接收文本描述，返回 GLB 格式的 3D 模型。
+基于 [NVlabs/GraspGen](https://github.com/NVlabs/GraspGen) 的 6 自由度抓取姿态生成服务。接收点云数据（base64 编码的 numpy 数组），返回抓取姿态和置信度。
 
-**环境要求：** NVIDIA GPU + CUDA 12.8
+**环境要求：** NVIDIA GPU + CUDA 12.1, Python 3.10
+
+**默认端口：** 8001
+
+#### 安装
+
+```bash
+cd services/graspgen
+bash setup.bash
+```
+
+#### 启动服务
+
+```bash
+uv run main.py
+
+# 自定义配置
+uv run main.py --host 0.0.0.0 --port 8001 --idle-timeout 600
+```
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--host` | `0.0.0.0` | 服务绑定地址 |
+| `--port` | `8001` | 监听端口 |
+| `--gripper-config` | `graspgen_robotiq_2f_140.yml` | 夹爪配置文件 |
+| `--idle-timeout` | `300` | 空闲超时秒数 |
+| `--idle-check-interval` | `30` | 空闲检查间隔秒数 |
+| `--log-level` | `INFO` | 日志级别 |
+
+#### API 端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/health` | 健康检查 |
+| `POST` | `/generate` | 抓取生成 |
+
+#### 请求格式
+
+```json
+{
+  "point_cloud": {
+    "data": "<base64 编码的 float32 字节>",
+    "shape": [2000, 3],
+    "dtype": "float32"
+  },
+  "num_grasps": 200,
+  "topk_num_grasps": -1,
+  "grasp_threshold": -1.0,
+  "min_grasps": 40,
+  "max_tries": 6,
+  "remove_outliers": true
+}
+```
+
+#### 示例客户端
+
+```bash
+# 健康检查
+uv run example_client.py --host localhost --port 8001 health
+
+# 从点云文件生成抓取
+uv run example_client.py --port 8001 generate --pcd-file input.npy
+
+# 从网格文件生成抓取
+uv run example_client.py --port 8001 generate --mesh-file model.obj --visualize
+```
+
+---
+
+### TRELLIS — 文本/图像 → 3D 生成服务
+
+基于 [Microsoft TRELLIS](https://github.com/microsoft/TRELLIS) 的 3D 模型生成服务，支持文本和图像两种输入，返回 GLB 格式的 3D 模型。
+
+**环境要求：** NVIDIA GPU + CUDA 12.8, Python 3.11
+
+**默认端口：** 8000
 
 #### 安装
 
 ```bash
 cd services/trellis
-bash setup.bash          # 一键安装 uv 虚拟环境及所有依赖（含 PyTorch、xformers、Flash-Attention 等）
+bash setup.bash
 ```
 
 > `setup.bash` 会自动安装 PyTorch (cu128)、TRELLIS 及其全部扩展依赖（nvdiffrast、diffoctreerast、spconv 等），编译耗时较长，请耐心等待。
@@ -190,30 +246,31 @@ bash setup.bash          # 一键安装 uv 虚拟环境及所有依赖（含 PyT
 #### 启动服务
 
 ```bash
-# 默认配置：监听 *:5555，使用 GPU 0
 uv run main.py
 
 # 自定义配置
-uv run main.py --host 0.0.0.0 --port 6000 --gpu-id 1 --model microsoft/TRELLIS-text-xlarge
-
-# 查看所有参数
-uv run main.py --help
+uv run main.py --host 0.0.0.0 --port 8000 --idle-timeout 600
 ```
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--host` | `*` | ZMQ 绑定地址 |
-| `--port` | `5555` | ZMQ 监听端口 |
-| `--gpu-id` | `0` | GPU 设备 ID |
-| `--recv-timeout` | `5000` | ZMQ 接收超时 (ms) |
-| `--model` | `microsoft/TRELLIS-text-xlarge` | HuggingFace 模型标识 |
+| `--host` | `0.0.0.0` | 服务绑定地址 |
+| `--port` | `8000` | 监听端口 |
+| `--text-model` | `microsoft/TRELLIS-text-xlarge` | 文本→3D 模型 |
+| `--image-model` | `microsoft/TRELLIS-image-large` | 图像→3D 模型 |
+| `--idle-timeout` | `300` | 空闲超时秒数 |
+| `--idle-check-interval` | `30` | 空闲检查间隔秒数 |
 | `--log-level` | `INFO` | 日志级别 |
 
-#### 请求协议
+#### API 端点
 
-客户端通过 ZMQ REQ/REP 模式发送 JSON 请求，服务端返回 JSON 响应。
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/health` | 健康检查 |
+| `POST` | `/text-to-3d` | 文本生成 3D |
+| `POST` | `/image-to-3d` | 图像生成 3D |
 
-**请求格式：**
+#### 文本生成 3D 请求格式
 
 ```json
 {
@@ -226,21 +283,27 @@ uv run main.py --help
 }
 ```
 
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| `text` | 是 | 文本描述提示词 |
-| `seed` | 否 | 随机种子（整数） |
-| `options.simplify` | 否 | 网格简化比例，0~1，默认 0.95 |
-| `options.texture_size` | 否 | 纹理分辨率，正整数，默认 1024 |
+#### 图像生成 3D 请求格式
 
-**成功响应：**
+```json
+{
+  "image": "<base64 编码的图片数据>",
+  "seed": 42,
+  "options": {
+    "simplify": 0.95,
+    "texture_size": 1024,
+    "preprocess_image": true
+  }
+}
+```
+
+#### 成功响应
 
 ```json
 {
   "status": "success",
   "glb_data": "<base64 编码的 GLB 文件>",
   "metadata": {
-    "prompt": "A modern chair with wooden legs",
     "seed": 42,
     "generation_time": 12.34,
     "file_size": 524288,
@@ -250,12 +313,101 @@ uv run main.py --help
 }
 ```
 
-**错误响应：**
+#### 示例客户端
+
+```bash
+# 健康检查
+uv run example_client.py --host localhost --port 8000 health
+
+# 文本生成 3D
+uv run example_client.py --port 8000 text-to-3d --text "A modern chair"
+
+# 图像生成 3D
+uv run example_client.py --port 8000 image-to-3d photo.png
+```
+
+---
+
+### SDXL — 文本生成图片服务
+
+基于 [Stability AI SDXL](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0) 的文本生成图片服务，通过 HuggingFace diffusers 提供。
+
+**环境要求：** NVIDIA GPU + CUDA, Python 3.11
+
+**默认端口：** 8002
+
+#### 安装
+
+```bash
+cd services/huggingface
+bash setup.bash
+```
+
+#### 启动服务
+
+```bash
+cd sdxl
+uv run main.py
+
+# 自定义配置
+uv run main.py --host 0.0.0.0 --port 8002 --idle-timeout 600
+```
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--host` | `0.0.0.0` | 服务绑定地址 |
+| `--port` | `8002` | 监听端口 |
+| `--model` | `stabilityai/stable-diffusion-xl-base-1.0` | HuggingFace 模型标识 |
+| `--idle-timeout` | `300` | 空闲超时秒数 |
+| `--idle-check-interval` | `30` | 空闲检查间隔秒数 |
+| `--log-level` | `INFO` | 日志级别 |
+
+#### API 端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/health` | 健康检查 |
+| `POST` | `/text-to-image` | 文本生成图片 |
+
+#### 请求格式
 
 ```json
 {
-  "status": "error",
-  "error": "错误描述",
-  "error_type": "ValueError"
+  "prompt": "a photo of an astronaut riding a horse on mars",
+  "seed": 42,
+  "options": {
+    "height": 1024,
+    "width": 1024,
+    "num_inference_steps": 40,
+    "guidance_scale": 5.0,
+    "negative_prompt": null,
+    "num_images_per_prompt": 1
+  }
 }
+```
+
+#### 成功响应
+
+```json
+{
+  "status": "success",
+  "images": ["<base64 编码的 PNG 图片>"],
+  "metadata": {
+    "seed": 42,
+    "generation_time": 8.5,
+    "num_images": 1,
+    "height": 1024,
+    "width": 1024
+  }
+}
+```
+
+#### 示例客户端
+
+```bash
+# 健康检查
+uv run example_client.py --host localhost --port 8002 health
+
+# 文本生成图片
+uv run example_client.py --port 8002 generate --prompt "a cat sitting on a sofa"
 ```

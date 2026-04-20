@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Example client for GraspGen ZMQ Server
+Example client for GraspGen FastAPI Server
 
-Demonstrates how to connect to the GraspGen ZMQ server and request
-6-DOF grasp generation from point clouds or meshes.
+Demonstrates how to call the GraspGen FastAPI server for 6-DOF grasp
+generation from point clouds or meshes using the requests library.
 """
 
 import argparse
 import base64
-import json
+import os
 import sys
 import time
 
 import numpy as np
-import zmq
+import requests
 
 
 def load_point_cloud_from_mesh(mesh_file: str, scale: float = 1.0, num_points: int = 2000) -> np.ndarray:
@@ -94,69 +94,106 @@ def encode_numpy_array(array: np.ndarray) -> dict:
     }
 
 
-def send_request(
-    host: str = "localhost",
-    port: int = 5555,
-    point_cloud: np.ndarray = None,
+def grasp_from_numpy(
+    base_url: str,
+    point_cloud: np.ndarray,
     num_grasps: int = 200,
     topk_num_grasps: int = -1,
     grasp_threshold: float = -1.0,
-    options: dict = None,
+    min_grasps: int = 40,
+    max_tries: int = 6,
+    remove_outliers: bool = True,
 ) -> dict:
     """
-    Send a grasp generation request to the GraspGen ZMQ server.
+    Generate grasps from a numpy point cloud array via JSON request.
 
     Args:
-        host: Server host
-        port: Server port
-        point_cloud: (N, 3) numpy float32 array
+        base_url: Server base URL
+        point_cloud: (N, 3) float32 point cloud
         num_grasps: Number of grasps to sample
         topk_num_grasps: Return only top-k grasps (-1 = use threshold)
         grasp_threshold: Minimum confidence threshold (-1 = use topk)
-        options: Additional options
+        min_grasps: Minimum grasps required
+        max_tries: Maximum retry attempts
+        remove_outliers: Remove outliers before inference
 
     Returns:
         Response dictionary from server
     """
-    if point_cloud is None:
-        raise ValueError("point_cloud is required")
-
-    if options is None:
-        options = {}
-
-    # Build request
-    request = {
+    payload = {
         "point_cloud": encode_numpy_array(point_cloud),
         "num_grasps": num_grasps,
         "topk_num_grasps": topk_num_grasps,
         "grasp_threshold": grasp_threshold,
-        "options": options,
+        "min_grasps": min_grasps,
+        "max_tries": max_tries,
+        "remove_outliers": remove_outliers,
     }
 
-    print(f"Connecting to tcp://{host}:{port}")
-    context = zmq.Context()
-    socket = context.socket(zmq.REQ)
-    socket.setsockopt(zmq.RCVTIMEO, 300000)  # 5 minute timeout
-    socket.connect(f"tcp://{host}:{port}")
+    print(f"Sending grasp generation request ({len(point_cloud)} points)")
+    start_time = time.time()
 
-    try:
-        print(f"Sending request with {len(point_cloud)} points...")
-        start_time = time.time()
+    resp = requests.post(f"{base_url}/generate", json=payload, timeout=300)
+    resp.raise_for_status()
 
-        socket.send_string(json.dumps(request))
-        print("Request sent, waiting for response...")
+    elapsed = time.time() - start_time
+    print(f"Response received in {elapsed:.2f}s")
 
-        response_json = socket.recv_string()
-        response = json.loads(response_json)
+    return resp.json()
 
-        elapsed = time.time() - start_time
-        print(f"Response received in {elapsed:.2f}s")
 
-        return response
+def check_health(base_url: str) -> dict:
+    """Check server health status."""
+    resp = requests.get(f"{base_url}/health", timeout=10)
+    resp.raise_for_status()
+    return resp.json()
 
-    finally:
-        socket.close()
-        context.term()
+
+def grasp_from_mesh(
+    base_url: str,
+    mesh_file: str,
+    mesh_scale: float = 1.0,
+    num_sample_points: int = 2000,
+    num_grasps: int = 200,
+    topk_num_grasps: int = -1,
+    grasp_threshold: float = -1.0,
+    min_grasps: int = 40,
+    max_tries: int = 6,
+    remove_outliers: bool = True,
+) -> dict:
+    """
+    Generate grasps from a mesh file.
+
+    Loads the mesh, samples surface points, and sends to the server.
+
+    Args:
+        base_url: Server base URL
+        mesh_file: Path to mesh file (.obj/.stl/.ply)
+        mesh_scale: Scale factor for mesh
+        num_sample_points: Number of points to sample from mesh surface
+        num_grasps: Number of grasps to sample
+        topk_num_grasps: Return only top-k grasps
+        grasp_threshold: Minimum confidence threshold
+        min_grasps: Minimum grasps required
+        max_tries: Maximum retry attempts
+        remove_outliers: Remove outliers before inference
+
+    Returns:
+        Response dictionary from server
+    """
+    point_cloud = load_point_cloud_from_mesh(mesh_file, mesh_scale, num_sample_points)
+    print(f"Sampled {len(point_cloud)} points from mesh surface")
+
+    return grasp_from_numpy(
+        base_url,
+        point_cloud,
+        num_grasps=num_grasps,
+        topk_num_grasps=topk_num_grasps,
+        grasp_threshold=grasp_threshold,
+        min_grasps=min_grasps,
+        max_tries=max_tries,
+        remove_outliers=remove_outliers,
+    )
 
 
 def decode_response(response: dict) -> tuple:
@@ -175,7 +212,9 @@ def decode_response(response: dict) -> tuple:
         return None, None, f"{error_type}: {error}"
 
     # Decode grasps
-    grasps_data = response.get("grasps", {})
+    grasps_data = response.get("grasps")
+    if grasps_data is None:
+        return None, None, "No grasp data in response"
     grasps_bytes = base64.b64decode(grasps_data["data"])
     grasps = np.frombuffer(grasps_bytes, dtype=np.float32).reshape(grasps_data["shape"])
 
@@ -222,7 +261,7 @@ def visualize_results(
         )
     except ImportError:
         print("Warning: viser visualization requires grasp_gen package.")
-        print("Install with: pip install -e ../../deps/GraspGen")
+        print("Install with: pip install -e ../../deps/graspgen")
         return
 
     vis = create_visualizer(port=viser_port)
@@ -255,51 +294,82 @@ def visualize_results(
 def main():
     """Main entry point for example client."""
     parser = argparse.ArgumentParser(
-        description="GraspGen ZMQ Server Example Client",
+        description="GraspGen FastAPI Server Example Client",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
     parser.add_argument("--host", type=str, default="localhost", help="Server host")
-    parser.add_argument("--port", type=int, default=5555, help="Server port")
+    parser.add_argument("--port", type=int, default=8001, help="Server port")
 
-    input_group = parser.add_mutually_exclusive_group(required=True)
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # health check
+    subparsers.add_parser("health", help="Check server health")
+
+    # generate grasps
+    gen_parser = subparsers.add_parser("generate", help="Generate grasps from point cloud or mesh")
+
+    input_group = gen_parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument(
         "--mesh-file", type=str, help="Path to a mesh file (.obj / .stl / .ply)"
     )
     input_group.add_argument(
-        "--pcd-file", type=str, help="Path to a point cloud file (.pcd / .ply / .xyz / .npy)"
+        "--pcd-file", type=str, help="Path to a point cloud file (.npy / .npz / .ply / .pcd / .xyz)"
     )
 
-    parser.add_argument(
+    gen_parser.add_argument(
         "--mesh-scale", type=float, default=1.0, help="Scale factor for mesh"
     )
-    parser.add_argument(
+    gen_parser.add_argument(
         "--num-sample-points",
         type=int,
         default=2000,
         help="Number of points to sample from mesh",
     )
-    parser.add_argument(
+    gen_parser.add_argument(
         "--num-grasps", type=int, default=200, help="Number of grasps to generate"
     )
-    parser.add_argument(
+    gen_parser.add_argument(
         "--topk-num-grasps",
         type=int,
-        default=100,
+        default=-1,
         help="Return only top-k grasps (-1 for all)",
     )
-    parser.add_argument(
+    gen_parser.add_argument(
         "--grasp-threshold",
         type=float,
         default=-1.0,
         help="Minimum confidence threshold (-1 to use topk)",
     )
-    parser.add_argument(
+    gen_parser.add_argument(
+        "--min-grasps",
+        type=int,
+        default=40,
+        help="Minimum grasps required before stopping retries",
+    )
+    gen_parser.add_argument(
+        "--max-tries",
+        type=int,
+        default=6,
+        help="Maximum inference retry attempts",
+    )
+    gen_parser.add_argument(
+        "--no-remove-outliers",
+        action="store_true",
+        help="Disable outlier removal",
+    )
+    gen_parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Output file for results (.npz)",
+    )
+    gen_parser.add_argument(
         "--visualize",
         action="store_true",
         help="Visualize results with viser (requires grasp_gen package)",
     )
-    parser.add_argument(
+    gen_parser.add_argument(
         "--viser-port",
         type=int,
         default=8080,
@@ -307,69 +377,105 @@ def main():
     )
 
     args = parser.parse_args()
+    base_url = f"http://{args.host}:{args.port}"
 
-    # Load point cloud
-    if args.mesh_file:
-        input_source = args.mesh_file
-        print(f"Loading mesh: {args.mesh_file} (scale={args.mesh_scale})")
-        point_cloud = load_point_cloud_from_mesh(
-            args.mesh_file, args.mesh_scale, args.num_sample_points
-        )
-        print(f"Sampled {len(point_cloud)} points from mesh surface")
-    else:
-        input_source = args.pcd_file
-        print(f"Loading point cloud: {args.pcd_file}")
-        point_cloud = load_point_cloud_from_file(args.pcd_file)
-        print(f"Loaded {len(point_cloud)} points from file")
+    if not args.command:
+        parser.print_help()
+        sys.exit(0)
 
-    # Send request
-    print("=" * 60)
-    print("GraspGen ZMQ Client")
-    print("=" * 60)
-    print(f"Host: {args.host}:{args.port}")
-    print(f"Points: {len(point_cloud)}")
-    print(f"Num grasps: {args.num_grasps}")
-    print(f"Top-k: {args.topk_num_grasps}")
-    print(f"Threshold: {args.grasp_threshold}")
-    print("=" * 60)
+    if args.command == "health":
+        result = check_health(base_url)
+        print(f"Status: {result['status']}")
+        print(f"Model state: {result.get('model_state', 'N/A')}")
+        print(f"GPU: {result['gpu']}")
+        if result.get("gpu_memory_allocated_gb") is not None:
+            print(f"GPU memory allocated: {result['gpu_memory_allocated_gb']:.2f} GB")
+        if result.get("gpu_memory_reserved_gb") is not None:
+            print(f"GPU memory reserved: {result['gpu_memory_reserved_gb']:.2f} GB")
+        if result.get("idle_timeout") is not None:
+            print(f"Idle timeout: {result['idle_timeout']}s")
 
-    response = send_request(
-        host=args.host,
-        port=args.port,
-        point_cloud=point_cloud,
-        num_grasps=args.num_grasps,
-        topk_num_grasps=args.topk_num_grasps,
-        grasp_threshold=args.grasp_threshold,
-    )
+    elif args.command == "generate":
+        print("=" * 60)
+        print("GraspGen FastAPI Client")
+        print("=" * 60)
+        print(f"Server: {base_url}")
+        print(f"Num grasps: {args.num_grasps}")
+        print(f"Top-k: {args.topk_num_grasps}")
+        print(f"Threshold: {args.grasp_threshold}")
+        print("=" * 60)
 
-    # Decode response
-    grasps, confidences, result = decode_response(response)
+        if args.mesh_file:
+            input_source = args.mesh_file
+            print(f"Loading mesh: {args.mesh_file} (scale={args.mesh_scale})")
+            response = grasp_from_mesh(
+                base_url=base_url,
+                mesh_file=args.mesh_file,
+                mesh_scale=args.mesh_scale,
+                num_sample_points=args.num_sample_points,
+                num_grasps=args.num_grasps,
+                topk_num_grasps=args.topk_num_grasps,
+                grasp_threshold=args.grasp_threshold,
+                min_grasps=args.min_grasps,
+                max_tries=args.max_tries,
+                remove_outliers=not args.no_remove_outliers,
+            )
+        else:
+            input_source = args.pcd_file
+            print(f"Loading point cloud: {args.pcd_file}")
+            point_cloud = load_point_cloud_from_file(args.pcd_file)
+            print(f"Loaded {len(point_cloud)} points from file")
 
-    if grasps is None:
-        print(f"\nError: {result}")
-        sys.exit(1)
+            response = grasp_from_numpy(
+                base_url=base_url,
+                point_cloud=point_cloud,
+                num_grasps=args.num_grasps,
+                topk_num_grasps=args.topk_num_grasps,
+                grasp_threshold=args.grasp_threshold,
+                min_grasps=args.min_grasps,
+                max_tries=args.max_tries,
+                remove_outliers=not args.no_remove_outliers,
+            )
 
-    # Print results
-    print(f"\n{'=' * 60}")
-    print("Results")
-    print(f"{'=' * 60}")
-    print(f"Input: {input_source}")
-    print(f"Grasps returned: {len(grasps)}")
-    if len(confidences) > 0:
-        print(f"Confidence range: {confidences.min():.4f} - {confidences.max():.4f}")
-        print(f"Best grasp confidence: {confidences[0]:.4f}")
-    if isinstance(result, dict):
-        print(f"Generation time: {result.get('generation_time', 'N/A')}s")
-        print(f"Gripper: {result.get('gripper_name', 'N/A')}")
-    print(f"{'=' * 60}")
+        # Decode response
+        grasps, confidences, result = decode_response(response)
 
-    # Visualize with viser if requested
-    if args.visualize and len(grasps) > 0:
+        if grasps is None:
+            print(f"\nError: {result}")
+            sys.exit(1)
+
+        # Print results
+        print(f"\n{'=' * 60}")
+        print("Results")
+        print(f"{'=' * 60}")
+        print(f"Input: {input_source}")
+        print(f"Grasps returned: {len(grasps)}")
+        if len(confidences) > 0:
+            print(f"Confidence range: {confidences.min():.4f} - {confidences.max():.4f}")
+            print(f"Best grasp confidence: {confidences[0]:.4f}")
         if isinstance(result, dict):
-            gripper_name = result.get("gripper_name", "robotiq_2f_140")
-        visualize_results(
-            point_cloud, grasps, confidences, gripper_name, args.viser_port
-        )
+            print(f"Generation time: {result.get('generation_time', 'N/A')}s")
+            print(f"Gripper: {result.get('gripper_name', 'N/A')}")
+        print(f"{'=' * 60}")
+
+        # Save results if requested
+        if args.output:
+            save_results(grasps, confidences, args.output)
+
+        # Visualize with viser if requested
+        if args.visualize and len(grasps) > 0:
+            if isinstance(result, dict):
+                gripper_name = result.get("gripper_name", "robotiq_2f_140")
+            # Reload point cloud for visualization (mesh needs resampling)
+            if args.mesh_file:
+                pc = load_point_cloud_from_mesh(
+                    args.mesh_file, args.mesh_scale, args.num_sample_points
+                )
+            else:
+                pc = point_cloud
+            visualize_results(
+                pc, grasps, confidences, gripper_name, args.viser_port
+            )
 
 
 if __name__ == "__main__":

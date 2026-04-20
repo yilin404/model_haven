@@ -16,6 +16,7 @@ wheels/
 # Claude Code settings
 /.claude/
 /CLAUDE.md
+/.codex
 
 reports/
 /data/

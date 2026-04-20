@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-GraspGen FastAPI Server - 6-DOF Grasp Generation Service
+SDXL FastAPI Server - Text-to-Image Generation Service
 
-A FastAPI-based server that wraps NVIDIA's GraspGen diffusion model for 6-DOF
-grasp generation, enabling remote clients to generate grasp poses from
-point clouds or meshes.
+A FastAPI-based server that wraps Stability AI's SDXL model via
+HuggingFace diffusers for text-to-image generation.
 
 Features:
 - Automatic GPU selection (chooses GPU with most free memory)
@@ -18,24 +17,17 @@ import asyncio
 import base64
 import enum
 import logging
-import os
 import sys
 import time
 from contextlib import asynccontextmanager, suppress
-
-import numpy as np
-import torch
-
-import uvicorn
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field, field_validator
-
+from io import BytesIO
 from typing import Any, Dict, Optional
 
-# Add GraspGen to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../deps/graspgen"))
-
-from grasp_gen.grasp_server import GraspGenSampler, load_grasp_cfg
+import torch
+import uvicorn
+from diffusers import StableDiffusionXLPipeline
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 
 # Configure logging
 logging.basicConfig(
@@ -43,7 +35,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("graspgen_server.log"),
+        logging.FileHandler("sdxl_server.log"),
     ],
 )
 logger = logging.getLogger(__name__)
@@ -52,56 +44,43 @@ logger = logging.getLogger(__name__)
 # ===========================================================================
 # Pydantic models
 # ===========================================================================
-class PointCloudData(BaseModel):
-    """Serialized numpy array for point cloud transport."""
+class TextToImageOptions(BaseModel):
+    """Options for image generation."""
 
-    data: str
-    shape: list
-    dtype: str
-
-
-class GraspGenRequest(BaseModel):
-    """Request body for JSON-based grasp generation."""
-
-    point_cloud: Any
-
-    num_grasps: int = Field(default=200, gt=0, description="Number of grasps to sample")
-    topk_num_grasps: int = Field(
-        default=-1, description="Return only top-k grasps (-1 = use threshold)"
+    height: int = Field(
+        default=1024, gt=0, le=2048, description="Image height in pixels"
     )
-    grasp_threshold: float = Field(
-        default=-1.0, description="Minimum confidence threshold (-1 = use topk)"
+    width: int = Field(default=1024, gt=0, le=2048, description="Image width in pixels")
+    num_inference_steps: int = Field(
+        default=40, gt=0, le=100, description="Number of denoising steps"
     )
-    min_grasps: int = Field(
-        default=40, gt=0, description="Minimum grasps required before stopping retries"
+    guidance_scale: float = Field(
+        default=5.0, ge=0, le=20, description="Guidance scale (CFG)"
     )
-    max_tries: int = Field(
-        default=6, gt=0, description="Maximum inference retry attempts"
-    )
-    remove_outliers: bool = Field(
-        default=True, description="Remove point cloud outliers before inference"
+    negative_prompt: Optional[str] = Field(default=None, description="Negative prompt")
+    num_images_per_prompt: int = Field(
+        default=1, ge=1, le=4, description="Number of images to generate"
     )
 
-    @field_validator("point_cloud", mode="before")
-    @classmethod
-    def parse_point_cloud(cls, v):
-        if isinstance(v, dict):
-            # Use PointCloudData for schema validation, then decode to numpy
-            pc = PointCloudData(**v)
 
-            raw = base64.b64decode(pc.data)
-            return np.frombuffer(raw, dtype=pc.dtype).reshape(pc.shape)
+class TextToImageRequest(BaseModel):
+    """Request body for text-to-image generation."""
 
-        raise ValueError("point_cloud must be a dict with {data, shape, dtype}")
+    prompt: str = Field(
+        ..., min_length=1, description="Text prompt for image generation"
+    )
+    seed: Optional[int] = Field(
+        default=None, description="Random seed for reproducibility"
+    )
+    options: Optional[TextToImageOptions] = None
 
 
-class GraspResponse(BaseModel):
-    """Response for grasp generation."""
+class ImageResponse(BaseModel):
+    """Response for image generation."""
 
     status: str
 
-    grasps: Optional[Dict[str, Any]] = None
-    confidences: Optional[Dict[str, Any]] = None
+    images: Optional[list[str]] = None
     metadata: Optional[Dict[str, Any]] = None
 
     error: Optional[str] = None
@@ -127,8 +106,8 @@ class HealthResponse(BaseModel):
 # ===========================================================================
 # Constants
 DEFAULT_HOST = "0.0.0.0"
-DEFAULT_PORT = 8001
-DEFAULT_GRIPPER_CONFIG = "graspgen_robotiq_2f_140.yml"
+DEFAULT_PORT = 8002
+DEFAULT_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
 DEFAULT_IDLE_TIMEOUT = 300  # 5 minutes
 DEFAULT_IDLE_CHECK_INTERVAL = 30  # seconds
 
@@ -141,9 +120,9 @@ class ModelState(str, enum.Enum):
     UNLOADING = "unloading"
 
 
-class GraspGenServer:
+class SDXLServer:
     """
-    FastAPI-based server for GraspGen 6-DOF grasp generation.
+    FastAPI-based server for SDXL text-to-image generation.
 
     Features automatic GPU selection, lazy model loading, idle-timeout
     unloading, and thread-safe serialized inference.
@@ -153,20 +132,15 @@ class GraspGenServer:
         self,
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
-        gripper_config: str = DEFAULT_GRIPPER_CONFIG,
+        model_name: str = DEFAULT_MODEL,
         idle_timeout: int = DEFAULT_IDLE_TIMEOUT,
         idle_check_interval: int = DEFAULT_IDLE_CHECK_INTERVAL,
     ):
-        # GraspGen model configuration
-        config_path = os.path.join("GraspGenModels", "checkpoints", gripper_config)
-        logger.info(f"Loading gripper config from: {config_path}")
-        self.cfg = load_grasp_cfg(config_path)
-
-        self.gripper_name = self.cfg.data.gripper_name
-        self.model_name = self.cfg.eval.model_name
+        # SDXL model configuration
+        self.model_name = model_name
 
         # Model state management
-        self.sampler: Optional[GraspGenSampler] = None
+        self.pipeline: Optional[StableDiffusionXLPipeline] = None
 
         self._model_state: ModelState = ModelState.NOT_LOADED
         self._state_lock = asyncio.Lock()  # protects load/unload state transitions
@@ -198,14 +172,14 @@ class GraspGenServer:
                     with suppress(asyncio.CancelledError):
                         await self._idle_monitor_task
 
-                await asyncio.to_thread(self._unload_model)
+                await asyncio.to_thread(self._unload_pipeline)
                 self._model_state = ModelState.NOT_LOADED
 
-                logger.info("Shutdown complete, pipelines unloaded")
+                logger.info("Shutdown complete, pipeline unloaded")
 
         self._app = FastAPI(
-            title="GraspGen 6-DOF Grasp Generation Service",
-            description="Generate 6-DOF grasp poses from point clouds using NVIDIA GraspGen.",
+            title="SDXL Image Generation Service",
+            description="Generate images from text prompts using Stability AI SDXL model.",
             version="1.0.0",
             lifespan=lifespan,
         )
@@ -216,7 +190,7 @@ class GraspGenServer:
 
         @self._app.get("/health", response_model=HealthResponse)
         async def health():
-            """Check server health and model status."""
+            """Check server health and pipeline status."""
             if torch.cuda.is_available():
                 gpu_names = ", ".join(
                     torch.cuda.get_device_name(i)
@@ -250,41 +224,18 @@ class GraspGenServer:
                 "idle_timeout": self.idle_timeout,
             }
 
-        @self._app.post("/generate", response_model=GraspResponse)
-        async def generate(request: GraspGenRequest):
-            """Generate grasps from a JSON request with base64-encoded point cloud."""
-            point_cloud = np.asarray(request.point_cloud, dtype=np.float32)
-
-            # Validate point cloud shape and values
-            if point_cloud.ndim != 2 or point_cloud.shape[1] != 3:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Point cloud must be (N, 3), got shape {point_cloud.shape}",
-                )
-            if point_cloud.shape[0] < 10:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Point cloud must have at least 10 points, got {point_cloud.shape[0]}",
-                )
-            if not np.all(np.isfinite(point_cloud)):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Point cloud contains non-finite values (NaN or Inf)",
-                )
-
+        @self._app.post("/text-to-image", response_model=ImageResponse)
+        async def text_to_image(request: TextToImageRequest):
+            """Generate image(s) from a text prompt."""
             self._last_activity = time.monotonic()
             await self._ensure_model_loaded()
 
             async with self._inference_lock:
                 result = await asyncio.to_thread(
-                    self._generate_grasps,
-                    point_cloud,
-                    num_grasps=request.num_grasps,
-                    topk_num_grasps=request.topk_num_grasps,
-                    grasp_threshold=request.grasp_threshold,
-                    min_grasps=request.min_grasps,
-                    max_tries=request.max_tries,
-                    remove_outliers=request.remove_outliers,
+                    self._generate_image,
+                    prompt=request.prompt,
+                    seed=request.seed,
+                    options=request.options,
                 )
 
             self._last_activity = time.monotonic()
@@ -296,16 +247,14 @@ class GraspGenServer:
 
     def start(self) -> None:
         """Start the FastAPI server using uvicorn."""
-        logger.info(f"Starting GraspGen server on {self.host}:{self.port}")
+        logger.info(f"Starting SDXL server on {self.host}:{self.port}")
         uvicorn.run(self._app, host=self.host, port=self.port, log_level="info")
 
     @staticmethod
     def _select_free_gpu() -> int:
         """Select the GPU with the most free memory."""
         if not torch.cuda.is_available():
-            raise RuntimeError(
-                "CUDA is not available. GraspGen requires GPU acceleration."
-            )
+            raise RuntimeError("CUDA is not available. SDXL requires GPU acceleration.")
         best_gpu = 0
         best_free = 0
         for i in range(torch.cuda.device_count()):
@@ -322,30 +271,34 @@ class GraspGenServer:
     # ----------------------------------------------------------------
     # Model Load / Unload
     # ----------------------------------------------------------------
-    def _load_model(self) -> None:
-        """Load the GraspGen model onto the selected GPU."""
-        logger.info(f"Loading GraspGen model: {self.gripper_name}")
+    def _load_pipeline(self) -> None:
+        """Load the SDXL pipeline onto the selected GPU."""
+        logger.info(f"Loading SDXL pipeline: {self.model_name}")
         start_time = time.time()
 
         try:
             self._gpu_id = self._select_free_gpu()
-            torch.cuda.set_device(self._gpu_id)
 
             logger.info(
-                f"Initializing GraspGenSampler (model={self.model_name}, gripper={self.gripper_name})"
+                f"Initializing StableDiffusionXLPipeline (model={self.model_name})"
             )
-            self.sampler = GraspGenSampler(self.cfg)
+            self.pipeline = StableDiffusionXLPipeline.from_pretrained(
+                self.model_name,
+                torch_dtype=torch.float16,
+                variant="fp16",
+                use_safetensors=True,
+            ).to(f"cuda:{self._gpu_id}")
 
             load_time = time.time() - start_time
-            logger.info(f"GraspGen model loaded successfully in {load_time:.2f}s")
+            logger.info(f"SDXL pipeline loaded successfully in {load_time:.2f}s")
 
         except Exception as e:
-            logger.error(f"Failed to load GraspGen model: {e}")
-            raise RuntimeError(f"Model loading failed: {e}") from e
+            logger.error(f"Failed to load SDXL pipeline: {e}")
+            raise RuntimeError(f"Pipeline loading failed: {e}") from e
 
-    def _unload_model(self) -> None:
-        """Unload the model and release GPU memory."""
-        if self.sampler is None:
+    def _unload_pipeline(self) -> None:
+        """Unload the pipeline and release GPU memory."""
+        if self.pipeline is None:
             return
 
         logger.info("[model] Unloading...")
@@ -356,8 +309,8 @@ class GraspGenServer:
             torch.cuda.set_device(gpu_id)
             mem_before = torch.cuda.memory_allocated(gpu_id) / (1024**3)
 
-        del self.sampler
-        self.sampler = None
+        del self.pipeline
+        self.pipeline = None
         torch.cuda.empty_cache()
 
         if gpu_id is not None:
@@ -381,7 +334,7 @@ class GraspGenServer:
             logger.info(f"[model] {self._model_state.value} -> LOADING")
             self._model_state = ModelState.LOADING
             try:
-                await asyncio.to_thread(self._load_model)
+                await asyncio.to_thread(self._load_pipeline)
                 self._model_state = ModelState.LOADED
                 logger.info("[model] LOADING -> LOADED")
             except Exception as e:
@@ -389,7 +342,7 @@ class GraspGenServer:
                 logger.error(f"[model] Failed to load: {e}")
                 raise HTTPException(
                     status_code=503,
-                    detail=f"Failed to load GraspGen model: {e}",
+                    detail=f"Failed to load SDXL pipeline: {e}",
                 )
 
     async def _idle_monitor_loop(self) -> None:
@@ -415,7 +368,7 @@ class GraspGenServer:
                                     f"[model] Idle timeout ({elapsed:.0f}s), unloading"
                                 )
                                 self._model_state = ModelState.UNLOADING
-                                await asyncio.to_thread(self._unload_model)
+                                await asyncio.to_thread(self._unload_pipeline)
                                 self._model_state = ModelState.NOT_LOADED
 
             except asyncio.CancelledError:
@@ -425,87 +378,82 @@ class GraspGenServer:
                 logger.error(f"Idle monitor error: {e}")
 
     # ----------------------------------------------------------------
-    # Serialization Helpers
+    # Image Generation (Inference)
     # ----------------------------------------------------------------
-    @staticmethod
-    def _encode_numpy_array(array: np.ndarray) -> Dict[str, Any]:
-        """Encode numpy array to base64 format."""
-        return {
-            "data": base64.b64encode(array.tobytes()).decode("utf-8"),
-            "shape": list(array.shape),
-            "dtype": str(array.dtype),
-        }
-
-    def _generate_grasps(
+    def _generate_image(
         self,
-        point_cloud: np.ndarray,
-        num_grasps: int,
-        topk_num_grasps: int,
-        grasp_threshold: float,
-        min_grasps: int,
-        max_tries: int,
-        remove_outliers: bool,
+        prompt: str,
+        seed: Optional[int] = None,
+        options: Optional[TextToImageOptions] = None,
     ) -> Dict[str, Any]:
-        """Generate grasp poses from point cloud using GraspGen.
+        """
+        Generate images from text prompt using SDXL.
 
-        Returns a dict matching GraspResponse fields.
+        Returns a dict matching ImageResponse fields.
         """
         # Ensure correct CUDA device before inference
         if self._gpu_id is not None:
             torch.cuda.set_device(self._gpu_id)
 
+        options = options or TextToImageOptions()
+
         logger.info(
-            f"Generating grasps for {len(point_cloud)} points "
-            f"(num_grasps={num_grasps}, topk={topk_num_grasps}, "
-            f"threshold={grasp_threshold})"
+            f"Generating image: '{prompt[:80]}...' (seed={seed}, "
+            f"steps={options.num_inference_steps}, guidance={options.guidance_scale}, "
+            f"size={options.width}x{options.height})"
         )
 
         start_time = time.time()
 
         try:
-            grasps, grasp_conf = GraspGenSampler.run_inference(
-                point_cloud,
-                self.sampler,
-                num_grasps=num_grasps,
-                topk_num_grasps=topk_num_grasps,
-                grasp_threshold=grasp_threshold,
-                min_grasps=min_grasps,
-                max_tries=max_tries,
-                remove_outliers=remove_outliers,
+            generator = (
+                torch.Generator("cuda").manual_seed(seed) if seed is not None else None
             )
 
-            generation_time = time.time() - start_time
+            output = self.pipeline(
+                prompt=prompt,
+                negative_prompt=options.negative_prompt,
+                height=options.height,
+                width=options.width,
+                num_inference_steps=options.num_inference_steps,
+                guidance_scale=options.guidance_scale,
+                num_images_per_prompt=options.num_images_per_prompt,
+                generator=generator,
+            )
 
-            # Convert to numpy
-            if len(grasps) > 0:
-                grasps_np = grasps.cpu().numpy().astype(np.float32)
-                conf_np = grasp_conf.cpu().numpy().astype(np.float32)
-            else:
-                grasps_np = np.empty((0, 4, 4), dtype=np.float32)
-                conf_np = np.empty((0,), dtype=np.float32)
+            # Encode images to base64 PNG
+            images_b64 = []
+            for img in output.images:
+                buffer = BytesIO()
+                img.save(buffer, format="PNG")
+                images_b64.append(base64.b64encode(buffer.getvalue()).decode("utf-8"))
+
+            generation_time = time.time() - start_time
+            metadata = {
+                "prompt": prompt,
+                "negative_prompt": options.negative_prompt,
+                "seed": seed,
+                "generation_time": round(generation_time, 2),
+                "num_images": len(images_b64),
+                "height": options.height,
+                "width": options.width,
+                "num_inference_steps": options.num_inference_steps,
+                "guidance_scale": options.guidance_scale,
+            }
 
             logger.info(
-                f"Generated {len(grasps_np)} grasps in {generation_time:.2f}s "
-                f"(conf range: {conf_np.min():.3f} - {conf_np.max():.3f})"
-                if len(conf_np) > 0
-                else f"Generated 0 grasps in {generation_time:.2f}s"
+                f"Generation complete in {generation_time:.2f}s, "
+                f"{len(images_b64)} image(s) generated"
             )
 
             return {
                 "status": "success",
-                "grasps": self._encode_numpy_array(grasps_np),
-                "confidences": self._encode_numpy_array(conf_np),
-                "metadata": {
-                    "num_grasps": len(grasps_np),
-                    "generation_time": round(generation_time, 2),
-                    "num_points": len(point_cloud),
-                    "gripper_name": self.gripper_name,
-                    "model_name": self.model_name,
-                },
+                "images": images_b64,
+                "metadata": metadata,
             }
 
         except Exception as e:
-            logger.error(f"Grasp generation failed: {e}")
+            logger.error(f"Image generation failed: {e}")
             return {
                 "status": "error",
                 "error": str(e),
@@ -515,10 +463,10 @@ class GraspGenServer:
 
 def main():
     """
-    Main entry point for the GraspGen FastAPI server.
+    Main entry point for the SDXL FastAPI server.
     """
     parser = argparse.ArgumentParser(
-        description="GraspGen FastAPI Server - 6-DOF Grasp Generation Service",
+        description="SDXL FastAPI Server - Text-to-Image Generation Service",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
@@ -529,10 +477,10 @@ def main():
         "--port", type=int, default=DEFAULT_PORT, help="Port to listen on"
     )
     parser.add_argument(
-        "--gripper-config",
+        "--model",
         type=str,
-        default=DEFAULT_GRIPPER_CONFIG,
-        help="Gripper configuration file",
+        default=DEFAULT_MODEL,
+        help="HuggingFace model identifier (e.g. stabilityai/stable-diffusion-xl-base-1.0)",
     )
     parser.add_argument(
         "--idle-timeout",
@@ -559,20 +507,20 @@ def main():
 
     # Print configuration
     logger.info("=" * 60)
-    logger.info("GraspGen FastAPI Server Configuration")
+    logger.info("SDXL FastAPI Server Configuration")
     logger.info("=" * 60)
     logger.info(f"Host: {args.host}")
     logger.info(f"Port: {args.port}")
-    logger.info(f"Gripper Config: {args.gripper_config}")
+    logger.info(f"Model: {args.model}")
     logger.info(f"Log Level: {args.log_level}")
     logger.info(f"Idle Timeout: {args.idle_timeout}s")
     logger.info(f"Idle Check Interval: {args.idle_check_interval}s")
     logger.info("=" * 60)
 
-    server = GraspGenServer(
+    server = SDXLServer(
         host=args.host,
         port=args.port,
-        gripper_config=args.gripper_config,
+        model_name=args.model,
         idle_timeout=args.idle_timeout,
         idle_check_interval=args.idle_check_interval,
     )

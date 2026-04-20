@@ -37,3 +37,6 @@ uv pip install /tmp/extensions/mip-splatting/submodules/diff-gaussian-rasterizat
 
 # spconv
 uv pip install spconv-cu120
+
+# FastAPI and Uvicorn for the web server
+uv pip install fastapi uvicorn python-multipart

@@ -196,15 +196,23 @@ class TrellisServer:
         self.idle_timeout = idle_timeout
         self.idle_check_interval = idle_check_interval
         self._idle_monitor_task: Optional[asyncio.Task] = None
-        assert self.idle_timeout > 0, "Idle timeout must be positive"
+        assert self.idle_timeout >= 0, "Idle timeout must be non-negative"
         assert self.idle_check_interval > 0, "Idle check interval must be positive"
 
         @asynccontextmanager
         async def lifespan(app: FastAPI):
             """Load pipelines on startup and start idle monitor."""
-            # Start idle monitor
-            self._idle_monitor_task = asyncio.create_task(self._idle_monitor_loop())
-            logger.info("Startup complete (lazy model loading enabled)")
+            # Auto-load pipelines on startup
+            try:
+                await self._ensure_text_pipeline_loaded()
+                await self._ensure_image_pipeline_loaded()
+            except Exception as e:
+                logger.warning(f"Startup model loading failed (will retry on first request): {e}")
+
+            # Start idle monitor (no-op if idle_timeout == 0)
+            if self.idle_timeout > 0:
+                self._idle_monitor_task = asyncio.create_task(self._idle_monitor_loop())
+            logger.info("Startup complete")
 
             try:
                 yield  # App is running...

@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Any, Dict, Optional
 
 # Add GraspGen to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../deps/graspgen"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../deps/GraspGen"))
 
 from grasp_gen.grasp_server import GraspGenSampler, load_grasp_cfg
 
@@ -192,7 +192,9 @@ class GraspGenServer:
             try:
                 await self._ensure_model_loaded()
             except Exception as e:
-                logger.warning(f"Startup model loading failed (will retry on first request): {e}")
+                logger.warning(
+                    f"Startup model loading failed (will retry on first request): {e}"
+                )
 
             # Start idle monitor (no-op if idle_timeout == 0)
             if self.idle_timeout > 0:

@@ -21,3 +21,6 @@ uv pip install --no-build-isolation ../../deps/graspgen/pointnet2_ops
 
 # FastAPI dependencies
 uv pip install fastapi uvicorn python-multipart requests
+
+# Download the pre-trained model weights
+git clone https://huggingface.co/adithyamurali/GraspGenModels

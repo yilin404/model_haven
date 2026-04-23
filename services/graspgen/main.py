@@ -188,13 +188,7 @@ class GraspGenServer:
         @asynccontextmanager
         async def lifespan(app: FastAPI):
             """Start idle monitor on startup, cleanup on shutdown."""
-            # Auto-load model on startup
-            try:
-                await self._ensure_model_loaded()
-            except Exception as e:
-                logger.warning(
-                    f"Startup model loading failed (will retry on first request): {e}"
-                )
+            # Models are loaded lazily on first request
 
             # Start idle monitor (no-op if idle_timeout == 0)
             if self.idle_timeout > 0:

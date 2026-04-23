@@ -201,13 +201,8 @@ class TrellisServer:
 
         @asynccontextmanager
         async def lifespan(app: FastAPI):
-            """Load pipelines on startup and start idle monitor."""
-            # Auto-load pipelines on startup
-            try:
-                await self._ensure_text_pipeline_loaded()
-                await self._ensure_image_pipeline_loaded()
-            except Exception as e:
-                logger.warning(f"Startup model loading failed (will retry on first request): {e}")
+            """Start idle monitor on startup, cleanup on shutdown."""
+            # Models are loaded lazily on first request
 
             # Start idle monitor (no-op if idle_timeout == 0)
             if self.idle_timeout > 0:

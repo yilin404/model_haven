@@ -159,12 +159,7 @@ class SAM3DObjectsServer:
         @asynccontextmanager
         async def lifespan(app: FastAPI):
             """Start idle monitor on startup, cleanup on shutdown."""
-            try:
-                await self._ensure_model_loaded()
-            except Exception as e:
-                logger.warning(
-                    f"Startup model loading failed (will retry on first request): {e}"
-                )
+            # Models are loaded lazily on first request
 
             if self.idle_timeout > 0:
                 self._idle_monitor_task = asyncio.create_task(self._idle_monitor_loop())

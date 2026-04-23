@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Initialize the environment
-uv init
+uv init --python 3.11
 uv venv --python=3.11
 
 # PyTorch with CUDA 12.8

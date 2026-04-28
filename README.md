@@ -2,20 +2,52 @@
 
 AI 模型服务聚合仓库，通过 FastAPI 提供 RESTful 模型推理服务接口。
 
-## 项目结构
+## 使用介绍
+
+### 快速开始
+
+```bash
+# 1. 初始化子模块
+git submodule update --init --recursive
+
+# 2. 安装并启动某个服务（以 trellis 为例）
+cd services/trellis
+bash setup.bash
+uv run main.py --host 0.0.0.0 --port 8000
+```
+
+### 通用特性
+
+- **自动 GPU 选择** — 选择空闲显存最多的 GPU
+- **懒加载** — 首次请求时才加载模型，减少启动时间
+- **空闲超时卸载** — 长时间无请求自动卸载模型，释放 GPU 显存
+- **线程安全推理** — 通过 asyncio Lock 序列化推理请求
+- **健康检查** — `GET /health` 端点查看模型状态和 GPU 信息
+
+---
+
+## 项目介绍
+
+### 项目结构
 
 ```
 model_haven/
-├── deps/           # Git submodule 依赖库
-│   ├── graspgen/   # NVlabs/GraspGen (6-DOF 抓取生成)
-│   └── trellis/    # microsoft/TRELLIS (文本/图像 → 3D)
-└── services/       # FastAPI 模型服务
-    ├── graspgen/       # 6-DOF 抓取生成服务
-    ├── trellis/        # 文本/图像 → 3D 生成服务
-    └── huggingface/    # HuggingFace 模型服务 (SDXL 等)
+├── deps/                # Git submodule 依赖库
+│   ├── GraspGen/        # NVlabs/GraspGen (6-DOF 抓取生成)
+│   ├── trellis/         # microsoft/TRELLIS (文本/图像 → 3D)
+│   ├── sam3/            # facebookresearch/sam3 (文本提示图像分割)
+│   ├── sam-3d-objects/  # facebookresearch/sam-3d-objects (单图像 3D 重建)
+│   ├── vggt/            # facebookresearch/vggt
+│   └── hamer/           # geopavlakos/hamer
+└── services/            # FastAPI 模型服务
+    ├── graspgen/            # 6-DOF 抓取生成服务
+    ├── trellis/             # 文本/图像 → 3D 生成服务
+    ├── sam3/                # SAM3 文本提示图像分割服务
+    ├── sam-3d-objects/      # SAM 3D 物体重建服务
+    └── huggingface/sdxl/    # HuggingFace 模型服务 (SDXL 等)
 ```
 
-## 依赖管理 (deps)
+### 依赖管理 (deps)
 
 `deps/` 目录存放 git submodule 库。使用以下命令添加新的依赖：
 
@@ -33,7 +65,7 @@ git submodule add https://github.com/microsoft/TRELLIS.git deps/trellis
 git submodule update --init --recursive
 ```
 
-## 服务项目结构 (services)
+### 服务项目结构 (services)
 
 每个服务目录包含以下文件：
 
@@ -49,7 +81,7 @@ services/<project_name>/
 
 每个服务使用 **uv** 独立管理 Python 环境，互不干扰。
 
-### 启动服务
+#### 启动服务
 
 ```bash
 # 1. 安装环境
@@ -60,23 +92,11 @@ bash setup.bash
 uv run main.py --host 0.0.0.0 --port <port>
 ```
 
-### 通用特性
-
-所有服务共享以下特性：
-
-- **自动 GPU 选择** — 选择空闲显存最多的 GPU
-- **懒加载** — 首次请求时才加载模型，减少启动时间
-- **空闲超时卸载** — 长时间无请求自动卸载模型，释放 GPU 显存
-- **线程安全推理** — 通过 asyncio Lock 序列化推理请求
-- **健康检查** — `GET /health` 端点查看模型状态和 GPU 信息
-
----
-
-## FastAPI Server 类书写规范
+### FastAPI Server 类书写规范
 
 所有 `main.py` 中的 Server 类应遵循以下接口规范：
 
-### 必需接口
+#### 必需接口
 
 ```python
 class XxxServer:
@@ -142,7 +162,7 @@ if __name__ == "__main__":
 
 ---
 
-## 开发新服务
+### 开发新服务
 
 1. 创建目录: `mkdir services/<new_service>`
 2. 添加依赖: `git submodule add <url> deps/<dep_name>`
@@ -151,263 +171,16 @@ if __name__ == "__main__":
 5. 实现 Server 类（继承通用模式：懒加载、空闲卸载、健康检查）
 6. 编写 `example_client.py` 示例客户端
 
+---
+
 ## 服务列表
 
-### GraspGen — 6-DOF 抓取生成服务
+详细文档请参阅各服务目录下的 README.md：
 
-基于 [NVlabs/GraspGen](https://github.com/NVlabs/GraspGen) 的 6 自由度抓取姿态生成服务。接收点云数据（base64 编码的 numpy 数组），返回抓取姿态和置信度。
-
-**环境要求：** NVIDIA GPU + CUDA 12.1, Python 3.10
-
-**默认端口：** 8001
-
-#### 安装
-
-```bash
-cd services/graspgen
-bash setup.bash
-```
-
-#### 启动服务
-
-```bash
-uv run main.py
-
-# 自定义配置
-uv run main.py --host 0.0.0.0 --port 8001 --idle-timeout 600
-```
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--host` | `0.0.0.0` | 服务绑定地址 |
-| `--port` | `8001` | 监听端口 |
-| `--gripper-config` | `graspgen_robotiq_2f_140.yml` | 夹爪配置文件 |
-| `--idle-timeout` | `300` | 空闲超时秒数 |
-| `--idle-check-interval` | `30` | 空闲检查间隔秒数 |
-| `--log-level` | `INFO` | 日志级别 |
-
-#### API 端点
-
-| 方法 | 路径 | 说明 |
+| 服务 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/health` | 健康检查 |
-| `POST` | `/generate` | 抓取生成 |
-
-#### 请求格式
-
-```json
-{
-  "point_cloud": {
-    "data": "<base64 编码的 float32 字节>",
-    "shape": [2000, 3],
-    "dtype": "float32"
-  },
-  "num_grasps": 200,
-  "topk_num_grasps": -1,
-  "grasp_threshold": -1.0,
-  "min_grasps": 40,
-  "max_tries": 6,
-  "remove_outliers": true
-}
-```
-
-#### 示例客户端
-
-```bash
-# 健康检查
-uv run example_client.py --host localhost --port 8001 health
-
-# 从点云文件生成抓取
-uv run example_client.py --port 8001 generate --pcd-file input.npy
-
-# 从网格文件生成抓取
-uv run example_client.py --port 8001 generate --mesh-file model.obj --visualize
-```
-
----
-
-### TRELLIS — 文本/图像 → 3D 生成服务
-
-基于 [Microsoft TRELLIS](https://github.com/microsoft/TRELLIS) 的 3D 模型生成服务，支持文本和图像两种输入，返回 GLB 格式的 3D 模型。
-
-**环境要求：** NVIDIA GPU + CUDA 12.8, Python 3.11
-
-**默认端口：** 8000
-
-#### 安装
-
-```bash
-cd services/trellis
-bash setup.bash
-```
-
-> `setup.bash` 会自动安装 PyTorch (cu128)、TRELLIS 及其全部扩展依赖（nvdiffrast、diffoctreerast、spconv 等），编译耗时较长，请耐心等待。
-
-#### 启动服务
-
-```bash
-uv run main.py
-
-# 自定义配置
-uv run main.py --host 0.0.0.0 --port 8000 --idle-timeout 600
-```
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--host` | `0.0.0.0` | 服务绑定地址 |
-| `--port` | `8000` | 监听端口 |
-| `--text-model` | `microsoft/TRELLIS-text-xlarge` | 文本→3D 模型 |
-| `--image-model` | `microsoft/TRELLIS-image-large` | 图像→3D 模型 |
-| `--idle-timeout` | `300` | 空闲超时秒数 |
-| `--idle-check-interval` | `30` | 空闲检查间隔秒数 |
-| `--log-level` | `INFO` | 日志级别 |
-
-#### API 端点
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/health` | 健康检查 |
-| `POST` | `/text-to-3d` | 文本生成 3D |
-| `POST` | `/image-to-3d` | 图像生成 3D |
-
-#### 文本生成 3D 请求格式
-
-```json
-{
-  "text": "A modern chair with wooden legs",
-  "seed": 42,
-  "options": {
-    "simplify": 0.95,
-    "texture_size": 1024
-  }
-}
-```
-
-#### 图像生成 3D 请求格式
-
-```json
-{
-  "image": "<base64 编码的图片数据>",
-  "seed": 42,
-  "options": {
-    "simplify": 0.95,
-    "texture_size": 1024,
-    "preprocess_image": true
-  }
-}
-```
-
-#### 成功响应
-
-```json
-{
-  "status": "success",
-  "glb_data": "<base64 编码的 GLB 文件>",
-  "metadata": {
-    "seed": 42,
-    "generation_time": 12.34,
-    "file_size": 524288,
-    "simplify": 0.95,
-    "texture_size": 1024
-  }
-}
-```
-
-#### 示例客户端
-
-```bash
-# 健康检查
-uv run example_client.py --host localhost --port 8000 health
-
-# 文本生成 3D
-uv run example_client.py --port 8000 text-to-3d --text "A modern chair"
-
-# 图像生成 3D
-uv run example_client.py --port 8000 image-to-3d photo.png
-```
-
----
-
-### SDXL — 文本生成图片服务
-
-基于 [Stability AI SDXL](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0) 的文本生成图片服务，通过 HuggingFace diffusers 提供。
-
-**环境要求：** NVIDIA GPU + CUDA, Python 3.11
-
-**默认端口：** 8002
-
-#### 安装
-
-```bash
-cd services/huggingface
-bash setup.bash
-```
-
-#### 启动服务
-
-```bash
-cd sdxl
-uv run main.py
-
-# 自定义配置
-uv run main.py --host 0.0.0.0 --port 8002 --idle-timeout 600
-```
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--host` | `0.0.0.0` | 服务绑定地址 |
-| `--port` | `8002` | 监听端口 |
-| `--model` | `stabilityai/stable-diffusion-xl-base-1.0` | HuggingFace 模型标识 |
-| `--idle-timeout` | `300` | 空闲超时秒数 |
-| `--idle-check-interval` | `30` | 空闲检查间隔秒数 |
-| `--log-level` | `INFO` | 日志级别 |
-
-#### API 端点
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/health` | 健康检查 |
-| `POST` | `/text-to-image` | 文本生成图片 |
-
-#### 请求格式
-
-```json
-{
-  "prompt": "a photo of an astronaut riding a horse on mars",
-  "seed": 42,
-  "options": {
-    "height": 1024,
-    "width": 1024,
-    "num_inference_steps": 40,
-    "guidance_scale": 5.0,
-    "negative_prompt": null,
-    "num_images_per_prompt": 1
-  }
-}
-```
-
-#### 成功响应
-
-```json
-{
-  "status": "success",
-  "images": ["<base64 编码的 PNG 图片>"],
-  "metadata": {
-    "seed": 42,
-    "generation_time": 8.5,
-    "num_images": 1,
-    "height": 1024,
-    "width": 1024
-  }
-}
-```
-
-#### 示例客户端
-
-```bash
-# 健康检查
-uv run example_client.py --host localhost --port 8002 health
-
-# 文本生成图片
-uv run example_client.py --port 8002 generate --prompt "a cat sitting on a sofa"
-```
+| [GraspGen](services/graspgen/README.md) | `services/graspgen/` | 6-DOF 抓取生成 |
+| [TRELLIS](services/trellis/README.md) | `services/trellis/` | 文本/图像 → 3D |
+| [SDXL](services/huggingface/sdxl/README.md) | `services/huggingface/sdxl/` | 文本生成图片 |
+| [SAM3](services/sam3/README.md) | `services/sam3/` | 文本提示图像分割 |
+| [SAM 3D Objects](services/sam-3d-objects/README.md) | `services/sam-3d-objects/` | 单图像 3D 重建 |

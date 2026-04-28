@@ -53,9 +53,9 @@ class SegmentRequest(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    image: Any = Field(
+    image: PILImage.Image = Field(
         ...,
-        description="Base64-encoded image (decoded to PIL Image by validator)",
+        description="Base64-encoded image string and will be decoded to PILImage.Image",
     )
     text_prompt: str = Field(
         ..., min_length=1, description="Text prompt for segmentation"
@@ -65,9 +65,9 @@ class SegmentRequest(BaseModel):
         default=None, ge=0, le=1, description="Confidence threshold (default: 0.5)"
     )
 
-    @field_validator("image", mode="before")
+    @field_validator("image", mode="before", json_schema_input_type=str)
     @classmethod
-    def parse_image(cls, v):
+    def parse_image(cls, v: str) -> PILImage.Image:
         if not isinstance(v, str):
             raise ValueError("Image must be a base64-encoded string")
         if "," in v:

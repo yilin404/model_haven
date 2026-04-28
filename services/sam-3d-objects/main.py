@@ -27,8 +27,8 @@ from typing import Any, Dict, Optional
 import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field, field_validator
-from PIL import Image
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from PIL import Image as PILImage
 
 # Must be set before importing sam3d_objects
 os.environ["LIDRA_SKIP_INIT"] = "true"
@@ -57,24 +57,52 @@ logger = logging.getLogger(__name__)
 class GenerateRequest(BaseModel):
     """Request body for 3D reconstruction."""
 
-    image: Any = Field(..., description="Base64-encoded image (PNG/JPEG)")
-    mask: Any = Field(..., description="Base64-encoded mask image (PNG, grayscale)")
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    image: PILImage.Image = Field(
+        ...,
+        description="Base64-encoded image string and will be decoded to PILImage.Image",
+    )
+    mask: PILImage.Image = Field(
+        ...,
+        description="Base64-encoded mask image string and will be decoded to PILImage.Image",
+    )
 
     seed: Optional[int] = Field(default=42, description="Random seed")
 
-    @field_validator("image", mode="before")
+    @field_validator("image", mode="before", json_schema_input_type=str)
     @classmethod
-    def parse_image(cls, v):
-        if isinstance(v, str):
-            return Image.open(io.BytesIO(base64.b64decode(v)))
-        raise ValueError("image must be a base64 string")
+    def parse_image(cls, v: str) -> PILImage.Image:
+        if not isinstance(v, str):
+            raise ValueError("Image must be a base64-encoded string")
+        if "," in v:
+            v = v.split(",", 1)[1]
+        try:
+            raw = base64.b64decode(v, validate=True)
+        except Exception as e:
+            raise ValueError(f"Image must be valid base64-encoded data: {e}")
 
-    @field_validator("mask", mode="before")
+        try:
+            return PILImage.open(io.BytesIO(raw)).convert("RGBA")
+        except Exception as e:
+            raise ValueError(f"Image data is not a valid image format: {e}")
+
+    @field_validator("mask", mode="before", json_schema_input_type=str)
     @classmethod
-    def parse_mask(cls, v):
-        if isinstance(v, str):
-            return Image.open(io.BytesIO(base64.b64decode(v)))
-        raise ValueError("mask must be a base64 string")
+    def parse_mask(cls, v: str) -> PILImage.Image:
+        if not isinstance(v, str):
+            raise ValueError("Mask must be a base64-encoded string")
+        if "," in v:
+            v = v.split(",", 1)[1]
+        try:
+            raw = base64.b64decode(v, validate=True)
+        except Exception as e:
+            raise ValueError(f"Mask must be valid base64-encoded data: {e}")
+
+        try:
+            return PILImage.open(io.BytesIO(raw)).convert("L")
+        except Exception as e:
+            raise ValueError(f"Mask data is not a valid image format: {e}")
 
 
 class GenerateResponse(BaseModel):
@@ -394,8 +422,8 @@ class SAM3DObjectsServer:
     # ----------------------------------------------------------------
     def _generate_3d(
         self,
-        image: Image.Image,
-        mask: Image.Image,
+        image: PILImage.Image,
+        mask: PILImage.Image,
         seed: Optional[int],
     ) -> Dict[str, Any]:
         """

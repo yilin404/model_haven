@@ -28,7 +28,7 @@ import torch
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from typing import Any, Dict, Optional
 
@@ -56,15 +56,18 @@ class PointCloudData(BaseModel):
     """Serialized numpy array for point cloud transport."""
 
     data: str
-    shape: list
+    shape: list[int]
     dtype: str
 
 
 class GraspGenRequest(BaseModel):
     """Request body for JSON-based grasp generation."""
 
-    point_cloud: Any = Field(
-        ..., description="Point cloud as {data: base64, shape: list, dtype: str}"
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    point_cloud: np.ndarray = Field(
+        ...,
+        description="Point cloud as {data: base64, shape: list, dtype: str} and will be decoded to (N, 3) float32 numpy array",
     )
 
     num_grasps: int = Field(default=200, gt=0, description="Number of grasps to sample")
@@ -84,15 +87,17 @@ class GraspGenRequest(BaseModel):
         default=True, description="Remove point cloud outliers before inference"
     )
 
-    @field_validator("point_cloud", mode="before")
+    @field_validator("point_cloud", mode="before", json_schema_input_type=dict)
     @classmethod
-    def parse_point_cloud(cls, v):
+    def parse_point_cloud(cls, v: dict) -> np.ndarray:
         if isinstance(v, dict):
             # Use PointCloudData for schema validation, then decode to numpy
             pc = PointCloudData(**v)
 
-            raw = base64.b64decode(pc.data)
-            return np.frombuffer(raw, dtype=pc.dtype).reshape(pc.shape)
+            raw = base64.b64decode(pc.data, validate=True)
+            arr = np.frombuffer(raw, dtype=pc.dtype).reshape(pc.shape)
+            assert arr.ndim == 2 and arr.shape[1] == 3, "point_cloud must have shape (N, 3)"
+            return arr.astype(np.float32, copy=False)
 
         raise ValueError("point_cloud must be a dict with {data, shape, dtype}")
 

@@ -23,7 +23,7 @@ from PIL import Image as PILImage
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from typing import Any, Dict, Optional
 
@@ -84,20 +84,25 @@ class TextTo3DRequest(BaseModel):
 class ImageTo3DRequest(BaseModel):
     """Request body for image-to-3D generation."""
 
-    image: str = Field(..., description="Base64-encoded image string")
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    image: PILImage.Image = Field(
+        ...,
+        description="Base64-encoded image string and will be decoded to PILImage.Image",
+    )
 
     seed: Optional[int] = Field(default=None, description="Random seed")
     options: Optional[ImageTo3DOptions] = None
 
-    @field_validator("image", mode="before")
+    @field_validator("image", mode="before", json_schema_input_type=str)
     @classmethod
-    def parse_image(cls, v):
+    def parse_image(cls, v: str) -> PILImage.Image:
         if not isinstance(v, str):
             raise ValueError("Image must be a base64-encoded string")
         if "," in v:
             v = v.split(",", 1)[1]
         try:
-            raw = base64.b64decode(v)
+            raw = base64.b64decode(v, validate=True)
         except Exception as e:
             raise ValueError(f"Image must be valid base64-encoded data: {e}")
 

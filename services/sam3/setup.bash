@@ -25,6 +25,6 @@ if [ -f "checkpoints/.download-complete" ]; then
 else
     uv pip install modelscope
     uv run -- modelscope download --model facebook/sam3 --local_dir "./checkpoints"
-    find ./checkpoints \( -name '.____temp' -o -name '.msc' -o -name '.mv' \) -delete
+    find ./checkpoints \( -name '._____temp' -o -name '.msc' -o -name '.mv' \) -delete
     touch checkpoints/.download-complete
 fi

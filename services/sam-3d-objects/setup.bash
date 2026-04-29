@@ -40,7 +40,12 @@ uv run ../../deps/sam-3d-objects/patching/hydra
 # FastAPI server dependencies
 uv pip install fastapi uvicorn python-multipart requests pillow
 
-# # Model Checkpoints
-# uv pip install modelscope
-# uv run -- modelscope download --model facebook/sam-3d-objects --local_dir "." --include "checkpoints/*"
-# find ./checkpoints \( -name '.____temp' -o -name '.msc' -o -name '.mv' \) -delete
+# Model Checkpoints
+if [ -f "checkpoints/.download-complete" ]; then
+    echo "Model weights already exist, skipping download"
+else
+    uv pip install modelscope
+    uv run -- modelscope download --model facebook/sam-3d-objects --local_dir "." --include "checkpoints/*"
+    find ./checkpoints \( -name '.____temp' -o -name '.msc' -o -name '.mv' \) -delete
+    touch checkpoints/.download-complete
+fi

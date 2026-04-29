@@ -14,6 +14,9 @@ git submodule update --init --recursive
 cd services/trellis
 bash setup.bash
 uv run main.py --host 0.0.0.0 --port 8000
+
+# 3. 或使用脚本快速启动（自动管理多个服务）
+bash scripts/start-services.sh --all
 ```
 
 ### 通用特性
@@ -23,6 +26,37 @@ uv run main.py --host 0.0.0.0 --port 8000
 - **空闲超时卸载** — 长时间无请求自动卸载模型，释放 GPU 显存
 - **线程安全推理** — 通过 asyncio Lock 序列化推理请求
 - **健康检查** — `GET /health` 端点查看模型状态和 GPU 信息
+
+### 服务管理脚本
+
+`scripts/start-services.sh` 通过 tmux 管理多个服务，自动发现 `services/` 下所有包含 `main.py` 的目录。
+
+```bash
+# 查看可用服务
+bash scripts/start-services.sh --help
+
+# 启动所有服务
+bash scripts/start-services.sh --all
+
+# 启动指定服务
+bash scripts/start-services.sh --sam3 --trellis
+
+# 调整日志级别
+bash scripts/start-services.sh --all --log-level DEBUG
+```
+
+启动后服务运行在 tmux session `model-haven` 中，关闭终端不影响运行。
+
+```bash
+# 查看服务日志
+tmux attach -t model-haven
+
+# 列出所有 window（每个服务一个 window）
+tmux list-windows -t model-haven
+
+# 停止所有服务
+tmux kill-session -t model-haven
+```
 
 ---
 

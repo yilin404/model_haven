@@ -23,4 +23,10 @@ uv pip install --no-build-isolation ../../deps/GraspGen/pointnet2_ops
 uv pip install fastapi uvicorn python-multipart requests
 
 # Download the pre-trained model weights
-git clone https://huggingface.co/adithyamurali/GraspGenModels
+if [ -f "GraspGenModels/.download-complete" ]; then
+    echo "Model weights already exist, skipping download"
+else
+    rm -rf GraspGenModels
+    git clone https://huggingface.co/adithyamurali/GraspGenModels
+    touch GraspGenModels/.download-complete
+fi

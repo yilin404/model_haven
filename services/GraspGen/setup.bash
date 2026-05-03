@@ -18,6 +18,8 @@ export TORCH_CUDA_ARCH_LIST="8.6"
 
 # Navigate to pointnet2_ops directory and install
 uv pip install --no-build-isolation ../../deps/GraspGen/pointnet2_ops
+# Prevent pointnet2_ops build artifacts from making GraspGen submodule dirty
+echo 'pointnet2_ops/build/' >> ../../.git/modules/deps/GraspGen/info/exclude
 
 # FastAPI dependencies
 uv pip install fastapi uvicorn python-multipart requests

@@ -44,10 +44,8 @@ def text_to_3d(
     payload = {
         "text": text,
         "seed": seed,
-        "options": {
-            "simplify": simplify,
-            "texture_size": texture_size,
-        },
+        "simplify": simplify,
+        "texture_size": texture_size,
     }
 
     print(f"Sending text-to-3D request: '{text}'")
@@ -90,11 +88,9 @@ def image_to_3d(
     payload = {
         "image": image_b64,
         "seed": seed,
-        "options": {
-            "simplify": simplify,
-            "texture_size": texture_size,
-            "preprocess_image": preprocess_image,
-        },
+        "simplify": simplify,
+        "texture_size": texture_size,
+        "preprocess_image": preprocess_image,
     }
 
     print(f"Sending image-to-3D request: {image_path}")
@@ -184,8 +180,9 @@ def main():
     if args.command == "health":
         result = check_health(base_url)
         print(f"Status: {result['status']}")
-        print(f"Text pipeline: {result['text_pipeline_state']}")
-        print(f"Image pipeline: {result['image_pipeline_state']}")
+        model_states = result.get("model_state", {})
+        for name, state in model_states.items():
+            print(f"Engine [{name}] state: {state}")
         print(f"GPU: {result['gpu']}")
         if result.get("gpu_memory_allocated_gb") is not None:
             print(f"GPU memory allocated: {result['gpu_memory_allocated_gb']:.2f} GB")

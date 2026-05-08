@@ -52,14 +52,12 @@ def text_to_image(
     payload = {
         "prompt": prompt,
         "seed": seed,
-        "options": {
-            "height": height,
-            "width": width,
-            "num_inference_steps": num_inference_steps,
-            "guidance_scale": guidance_scale,
-            "negative_prompt": negative_prompt,
-            "num_images_per_prompt": num_images,
-        },
+        "height": height,
+        "width": width,
+        "num_inference_steps": num_inference_steps,
+        "guidance_scale": guidance_scale,
+        "negative_prompt": negative_prompt,
+        "num_images_per_prompt": num_images,
     }
 
     print(f"Sending text-to-image request: '{prompt}'")
@@ -153,7 +151,10 @@ def main():
     if args.command == "health":
         result = check_health(base_url)
         print(f"Status: {result['status']}")
-        print(f"Model state: {result.get('model_state', 'N/A')}")
+        # model_state is a dict: {"engine_name": "state"}
+        model_states = result.get("model_state", {})
+        for name, state in model_states.items():
+            print(f"Engine [{name}] state: {state}")
         print(f"GPU: {result['gpu']}")
         if result.get("gpu_memory_allocated_gb") is not None:
             print(f"GPU memory allocated: {result['gpu_memory_allocated_gb']:.2f} GB")

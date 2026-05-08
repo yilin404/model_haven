@@ -144,7 +144,9 @@ def main():
     if args.command == "health":
         result = check_health(base_url)
         print(f"Status: {result['status']}")
-        print(f"Model state: {result.get('model_state', 'N/A')}")
+        model_states = result.get("model_state", {})
+        for name, state in model_states.items():
+            print(f"Engine [{name}] state: {state}")
         print(f"GPU: {result['gpu']}")
         if result.get("gpu_memory_allocated_gb") is not None:
             print(f"GPU memory allocated: {result['gpu_memory_allocated_gb']:.2f} GB")

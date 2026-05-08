@@ -68,13 +68,17 @@ tmux kill-session -t model-haven
 model_haven/
 ├── deps/                # Git submodule 依赖库
 │   ├── GraspGen/        # NVlabs/GraspGen (6-DOF 抓取生成)
+│   ├── PAct/            # PAct (零件铰接生成)
 │   ├── trellis/         # microsoft/TRELLIS (文本/图像 → 3D)
 │   ├── sam3/            # facebookresearch/sam3 (文本提示图像分割)
 │   ├── sam-3d-objects/  # facebookresearch/sam-3d-objects (单图像 3D 重建)
 │   ├── vggt/            # facebookresearch/vggt
 │   └── hamer/           # geopavlakos/hamer
 └── services/            # FastAPI 模型服务
-    ├── graspgen/            # 6-DOF 抓取生成服务
+    ├── __init__.py          # 包初始化
+    ├── common.py            # ModelEngine + BaseFastAPIServer 基类
+    ├── GraspGen/            # 6-DOF 抓取生成服务
+    ├── PAct/                # 零件铰接生成服务
     ├── trellis/             # 文本/图像 → 3D 生成服务
     ├── sam3/                # SAM3 文本提示图像分割服务
     ├── sam-3d-objects/      # SAM 3D 物体重建服务
@@ -126,53 +130,63 @@ bash setup.bash
 uv run main.py --host 0.0.0.0 --port <port>
 ```
 
-### FastAPI Server 类书写规范
+### FastAPI Server 基类架构
 
-所有 `main.py` 中的 Server 类应遵循以下接口规范：
+所有服务基于 `services/common.py` 中的两个基类：
 
-#### 必需接口
+- **`ModelEngine`** — 模型生命周期基类（load/unload/inference）
+- **`BaseFastAPIServer`** — FastAPI 服务基类（health、idle monitor、lifespan）
+
+#### 实现 ModelEngine
 
 ```python
-class XxxServer:
-    def __init__(
-        self,
-        host: str = "0.0.0.0",
-        port: int = 8000,
-        idle_timeout: int = 300,
-        idle_check_interval: int = 30,
-    ):
-        """Initialize the server.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from common import BaseFastAPIServer, ModelEngine, select_free_gpu
 
-        Args:
-            host: Host to bind to
-            port: Port to listen on
-            idle_timeout: Seconds before idle model unload (must be > 0)
-            idle_check_interval: Seconds between idle checks (must be > 0)
-        """
-        # Model state management
-        self._model_state: ModelState = ModelState.NOT_LOADED
-        self._state_lock = asyncio.Lock()
-        self._inference_lock = asyncio.Lock()
-        self._last_activity: float = time.monotonic()
-        self._gpu_id: Optional[int] = None
+class XxxEngine(ModelEngine):
+    def __init__(self, model_path: str):
+        super().__init__("model")  # engine name, used in health response
+        self.model_path = model_path
+        self.model = None
 
-        # FastAPI app with lifespan for idle monitor
-        self._app = FastAPI(title="...", lifespan=lifespan)
-        self._register_routes()
+    def _load_impl(self) -> None:
+        self.gpu_id = select_free_gpu()
+        self.model = load_model(self.model_path).to(f"cuda:{self.gpu_id}")
+
+    def _unload_impl(self) -> None:
+        if self.model is not None:
+            del self.model
+            self.model = None
+
+    def _run_inference_impl(self, input_data, **kwargs) -> dict:
+        result = self.model(input_data)
+        return {"status": "success", "data": result}
+```
+
+#### 实现 BaseFastAPIServer
+
+```python
+class XxxServer(BaseFastAPIServer):
+    def __init__(self, model_path: str, **kwargs):
+        self._engine = XxxEngine(model_path)
+        super().__init__(engines=[self._engine], **kwargs)
 
     def _register_routes(self) -> None:
-        """Register FastAPI routes (health, inference endpoints)."""
-        ...
+        @self._app.post("/predict")
+        async def predict(request: PredictRequest):
+            result = await self._engine.run_inference(request.input_data)
+            if result["status"] == "error":
+                raise HTTPException(
+                    status_code=result.get("http_status", 500), detail=result
+                )
+            return result
+```
 
-    def start(self) -> None:
-        """Start the FastAPI server using uvicorn."""
-        uvicorn.run(self._app, host=self.host, port=self.port, log_level="info")
+#### 启动入口
 
-
+```python
 def main():
-    """Main entry point for the FastAPI server."""
     parser = argparse.ArgumentParser(description="Xxx FastAPI Server")
-
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--idle-timeout", type=int, default=300)
@@ -189,10 +203,26 @@ def main():
     except Exception as e:
         sys.exit(1)
 
-
 if __name__ == "__main__":
     main()
 ```
+
+#### 健康检查响应
+
+所有服务共享统一的健康检查格式：
+
+```json
+{
+  "status": "ok",
+  "model_state": {"model": "not_loaded"},
+  "gpu": "NVIDIA RTX 4090",
+  "gpu_memory_allocated_gb": 0.0,
+  "gpu_memory_reserved_gb": 0.0,
+  "idle_timeout": 300
+}
+```
+
+`model_state` 为 `Dict[str, str]`，key 为引擎名称，value 为状态。多引擎服务（如 TRELLIS）会有多个 key。
 
 ---
 
@@ -202,8 +232,9 @@ if __name__ == "__main__":
 2. 添加依赖: `git submodule add <url> deps/<dep_name>`
 3. 创建文件结构（参考上方规范）
 4. 编写 `setup.bash` 安装脚本
-5. 实现 Server 类（继承通用模式：懒加载、空闲卸载、健康检查）
-6. 编写 `example_client.py` 示例客户端
+5. 实现 `ModelEngine` 子类（`_load_impl`、`_unload_impl`、`_run_inference_impl`）
+6. 实现 `BaseFastAPIServer` 子类（`_register_routes`）
+7. 编写 `example_client.py` 示例客户端
 
 ---
 
@@ -213,8 +244,9 @@ if __name__ == "__main__":
 
 | 服务 | 路径 | 说明 |
 |------|------|------|
-| [GraspGen](services/graspgen/README.md) | `services/graspgen/` | 6-DOF 抓取生成 |
 | [TRELLIS](services/trellis/README.md) | `services/trellis/` | 文本/图像 → 3D |
+| [GraspGen](services/GraspGen/README.md) | `services/GraspGen/` | 6-DOF 抓取生成 |
 | [SDXL](services/huggingface/sdxl/README.md) | `services/huggingface/sdxl/` | 文本生成图片 |
 | [SAM3](services/sam3/README.md) | `services/sam3/` | 文本提示图像分割 |
 | [SAM 3D Objects](services/sam-3d-objects/README.md) | `services/sam-3d-objects/` | 单图像 3D 重建 |
+| [PAct](services/PAct/README.md) | `services/PAct/` | 零件铰接生成 |

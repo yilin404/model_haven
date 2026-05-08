@@ -9,7 +9,7 @@
 ## 安装
 
 ```bash
-cd services/graspgen
+cd services/GraspGen
 bash setup.bash
 ```
 

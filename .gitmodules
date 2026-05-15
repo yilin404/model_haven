@@ -19,3 +19,6 @@
 [submodule "deps/PAct"]
 	path = deps/PAct
 	url = https://github.com/PAct-project/PAct.git
+[submodule "deps/particulate"]
+	path = deps/particulate
+	url = https://github.com/RuiningLi/particulate.git

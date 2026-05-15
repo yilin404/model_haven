@@ -105,14 +105,13 @@ def image_to_3d(
     return resp.json()
 
 
-def save_glb(response: dict, output_file: str, show: bool = True) -> None:
+def save_glb(response: dict, output_file: str) -> None:
     """
     Save GLB data from response to file.
 
     Args:
         response: Response dictionary from server
         output_file: Output file path
-        show: Whether to visualize the mesh using trimesh
     """
     if response["status"] != "success":
         print(f"Error: {response.get('error', 'Unknown error')}")
@@ -128,15 +127,6 @@ def save_glb(response: dict, output_file: str, show: bool = True) -> None:
     print(f"File size: {len(glb_data)} bytes")
     print(f"Generation time: {metadata.get('generation_time', 'N/A')}s")
     print(f"Seed: {metadata.get('seed', 'N/A')}")
-
-    if show:
-        try:
-            import trimesh
-
-            mesh = trimesh.load(output_file, file_type="glb")
-            mesh.show()
-        except ImportError:
-            print("trimesh not installed, skipping visualization")
 
 
 def main():

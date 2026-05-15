@@ -38,10 +38,10 @@ uv pip install /tmp/extensions/mip-splatting/submodules/diff-gaussian-rasterizat
 # spconv
 uv pip install spconv-cu120
 
-# segment-anything
+# SAM and Detectron2
 uv pip install git+https://github.com/facebookresearch/segment-anything.git
 uv pip install pycocotools
-uv pip install 'git+https://github.com/facebookresearch/detectron2.git'
+uv pip install 'git+https://github.com/facebookresearch/detectron2.git' --no-build-isolation
 uv pip install kornia timm
 
 # FastAPI and Uvicorn for the web server

@@ -1,6 +1,6 @@
 # SAM 3D Objects — 单图像 3D 重建服务
 
-基于 [Meta SAM 3D Objects](https://github.com/facebookresearch/sam-3d-objects) 的单图像 3D 物体重建服务。接收图片和对应掩码，返回 Gaussian Splat PLY 格式的 3D 模型。
+基于 [Meta SAM 3D Objects](https://github.com/facebookresearch/sam-3d-objects) 的单图像 3D 物体重建服务。接收图片和对应掩码，返回 Gaussian Splat PLY 和 GLB mesh 格式的 3D 模型。
 
 **环境要求：** NVIDIA GPU + CUDA 12.1, Python 3.11
 
@@ -61,16 +61,20 @@ uv run main.py --host 0.0.0.0 --port 8003 --idle-timeout 600
 ```json
 {
   "status": "success",
-  "ply_data": "<base64 编码的 PLY 文件>",
+  "ply_data": "<base64 编码的 Gaussian Splat PLY 文件>",
+  "glb_data": "<base64 编码的 GLB mesh 文件>",
   "metadata": {
     "generation_time": 15.0,
     "rotation": [...],
     "translation": [...],
     "scale": [...],
-    "file_size": 1048576
+    "ply_file_size": 1048576,
+    "glb_file_size": 524288
   }
 }
 ```
+
+> PLY 为 Gaussian Splat 点云格式，GLB 为多边形网格格式。两者是同一推理结果的不同 3D 表示。
 
 ## 示例客户端
 
@@ -81,6 +85,6 @@ uv run example_client.py --host localhost --port 8003 health
 # 从图像和掩码生成 3D
 uv run example_client.py --port 8003 generate --image object.png --mask mask.png
 
-# 指定种子和输出路径
-uv run example_client.py --port 8003 generate --image object.png --mask mask.png --seed 123 --output result.ply
+# 指定种子和输出路径（同时生成 result.ply 和 result.glb）
+uv run example_client.py --port 8003 generate --image object.png --mask mask.png --seed 123 --output result
 ```

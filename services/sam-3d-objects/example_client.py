@@ -72,6 +72,14 @@ def save_ply(response: dict, output_path: str) -> None:
     print(f"Saved: {output_path} ({len(ply_bytes)} bytes)")
 
 
+def save_glb(response: dict, output_path: str) -> None:
+    """Save GLB data from response to file."""
+    glb_bytes = base64.b64decode(response["glb_data"])
+    with open(output_path, "wb") as f:
+        f.write(glb_bytes)
+    print(f"Saved: {output_path} ({len(glb_bytes)} bytes)")
+
+
 def main():
     """Main entry point for example client."""
     parser = argparse.ArgumentParser(
@@ -92,7 +100,7 @@ def main():
     gen_parser.add_argument("--image", type=str, required=True, help="Input image path")
     gen_parser.add_argument("--mask", type=str, required=True, help="Mask image path")
     gen_parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    gen_parser.add_argument("--output", type=str, default="output.ply", help="Output PLY file path")
+    gen_parser.add_argument("--output", type=str, default="output", help="Output file path (without extension)")
 
     args = parser.parse_args()
     base_url = f"http://{args.host}:{args.port}"
@@ -135,7 +143,9 @@ def main():
 
         if response["status"] == "success":
             print("3D reconstruction successful!")
-            save_ply(response, args.output)
+            save_ply(response, f"{args.output}.ply")
+            if response.get("glb_data"):
+                save_glb(response, f"{args.output}.glb")
             metadata = response.get("metadata", {})
             print(f"Generation time: {metadata.get('generation_time', 'N/A')}s")
             print(f"Rotation: {metadata.get('rotation', 'N/A')}")

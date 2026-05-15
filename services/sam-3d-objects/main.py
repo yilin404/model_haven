@@ -95,24 +95,33 @@ class SAM3DObjectsEngine(ModelEngine):
             output["gs"].save_ply(ply_buffer)
             ply_bytes = ply_buffer.getvalue()
 
+            glb_mesh = output.get("glb")
+            glb_bytes = None
+            if glb_mesh is not None:
+                glb_buffer = io.BytesIO()
+                glb_mesh.export(glb_buffer, file_type="glb")
+                glb_bytes = glb_buffer.getvalue()
+
             rotation = output["rotation"].cpu().numpy().tolist()
             translation = output["translation"].cpu().numpy().tolist()
             scale = output["scale"].cpu().numpy().tolist()
 
             logger.info(
                 f"3D reconstruction complete in {generation_time:.2f}s "
-                f"(PLY size: {len(ply_bytes)} bytes)"
+                f"(PLY: {len(ply_bytes)} bytes, GLB: {len(glb_bytes) if glb_bytes else 0} bytes)"
             )
 
             return {
                 "status": "success",
                 "ply_data": base64.b64encode(ply_bytes).decode("utf-8"),
+                "glb_data": base64.b64encode(glb_bytes).decode("utf-8") if glb_bytes else None,
                 "metadata": {
                     "generation_time": round(generation_time, 2),
                     "rotation": rotation,
                     "translation": translation,
                     "scale": scale,
-                    "file_size": len(ply_bytes),
+                    "ply_file_size": len(ply_bytes),
+                    "glb_file_size": len(glb_bytes) if glb_bytes else 0,
                 },
             }
 
@@ -173,6 +182,7 @@ class GenerateRequest(BaseModel):
 class GenerateResponse(BaseModel):
     status: str
     ply_data: Optional[str] = None
+    glb_data: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     error_type: Optional[str] = None

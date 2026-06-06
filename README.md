@@ -68,17 +68,13 @@ tmux kill-session -t model-haven
 model_haven/
 ├── deps/                # Git submodule 依赖库
 │   ├── GraspGen/        # NVlabs/GraspGen (6-DOF 抓取生成)
-│   ├── PAct/            # PAct (零件铰接生成)
 │   ├── trellis/         # microsoft/TRELLIS (文本/图像 → 3D)
 │   ├── sam3/            # facebookresearch/sam3 (文本提示图像分割)
-│   ├── sam-3d-objects/  # facebookresearch/sam-3d-objects (单图像 3D 重建)
-│   ├── vggt/            # facebookresearch/vggt
-│   └── hamer/           # geopavlakos/hamer
+│   └── sam-3d-objects/  # facebookresearch/sam-3d-objects (单图像 3D 重建)
 └── services/            # FastAPI 模型服务
     ├── __init__.py          # 包初始化
     ├── common.py            # ModelEngine + BaseFastAPIServer 基类
     ├── GraspGen/            # 6-DOF 抓取生成服务
-    ├── PAct/                # 零件铰接生成服务
     ├── trellis/             # 文本/图像 → 3D 生成服务
     ├── sam3/                # SAM3 文本提示图像分割服务
     ├── sam-3d-objects/      # SAM 3D 物体重建服务
@@ -249,4 +245,3 @@ if __name__ == "__main__":
 | [SDXL](services/huggingface/sdxl/README.md) | `services/huggingface/sdxl/` | 文本生成图片 |
 | [SAM3](services/sam3/README.md) | `services/sam3/` | 文本提示图像分割 |
 | [SAM 3D Objects](services/sam-3d-objects/README.md) | `services/sam-3d-objects/` | 单图像 3D 重建 |
-| [PAct](services/PAct/README.md) | `services/PAct/` | 零件铰接生成 |

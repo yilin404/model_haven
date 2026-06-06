@@ -9,6 +9,7 @@ uv pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url ht
 
 # HuggingFace core
 uv pip install transformers accelerate sentencepiece protobuf
+uv pip install modelscope
 
 # Diffusers (FLUX image generation)
 uv pip install -U diffusers

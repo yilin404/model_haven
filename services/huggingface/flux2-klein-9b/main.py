@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """
-SDXL FastAPI Server - Text-to-Image Generation Service
+FLUX.2-klein-9B FastAPI Server - Text-to-Image Generation Service
 
-A FastAPI-based server that wraps Stability AI's SDXL model via
+A FastAPI-based server that wraps Black Forest Labs' FLUX.2-klein-9B model via
 HuggingFace diffusers for text-to-image generation.
+
+Key features:
+- CPU offload via enable_model_cpu_offload() to fit within ~24GB VRAM
+- 4-step distilled inference (default num_inference_steps=4)
+- Supports both text-to-image and image-to-image (multi-reference editing)
 """
 
 import argparse
@@ -13,11 +18,12 @@ import os
 import sys
 import time
 from io import BytesIO
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
-from diffusers import StableDiffusionXLPipeline
+from diffusers import Flux2KleinPipeline
 from fastapi import HTTPException
+from PIL import Image
 from pydantic import BaseModel, Field
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -29,24 +35,25 @@ logger = logging.getLogger(__name__)
 # ===========================================================================
 # ModelEngine
 # ===========================================================================
-DEFAULT_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
+DEFAULT_MODEL = "black-forest-labs/FLUX.2-klein-9B"
 
 
-class SDXLEngine(ModelEngine):
+class FLUX2KleinEngine(ModelEngine):
     def __init__(self, model_name: str = DEFAULT_MODEL):
         super().__init__("model")
         self.model_name = model_name
-        self.pipeline: Optional[StableDiffusionXLPipeline] = None
+        self.pipeline: Optional[Flux2KleinPipeline] = None
 
     def _load_impl(self) -> None:
         self.gpu_id = select_free_gpu()
-        self.pipeline = StableDiffusionXLPipeline.from_pretrained(
+        logger.info(f"Loading FLUX.2-klein-9B from {self.model_name} ...")
+        self.pipeline = Flux2KleinPipeline.from_pretrained(
             self.model_name,
-            torch_dtype=torch.float16,
-            variant="fp16",
-            use_safetensors=True,
-        ).to(f"cuda:{self.gpu_id}")
+            torch_dtype=torch.bfloat16,
+        )
+        # CPU offload is mandatory for 24GB GPUs (model raw footprint ~29GB)
         self.pipeline.enable_model_cpu_offload()
+        logger.info("Pipeline loaded with model_cpu_offload enabled")
 
     def _unload_impl(self) -> None:
         if self.pipeline is None:
@@ -62,7 +69,6 @@ class SDXLEngine(ModelEngine):
         width: int,
         num_inference_steps: int,
         guidance_scale: float,
-        negative_prompt: Optional[str],
         num_images_per_prompt: int,
     ) -> Dict[str, Any]:
         logger.info(
@@ -74,14 +80,13 @@ class SDXLEngine(ModelEngine):
 
         try:
             generator = (
-                torch.Generator(f"cuda:{self.gpu_id}").manual_seed(seed)
+                torch.Generator(device="cuda").manual_seed(seed)
                 if seed is not None
                 else None
             )
 
             output = self.pipeline(
                 prompt=prompt,
-                negative_prompt=negative_prompt,
                 height=height,
                 width=width,
                 num_inference_steps=num_inference_steps,
@@ -107,7 +112,6 @@ class SDXLEngine(ModelEngine):
                 "images": images_b64,
                 "metadata": {
                     "prompt": prompt,
-                    "negative_prompt": negative_prompt,
                     "seed": seed,
                     "generation_time": round(generation_time, 2),
                     "num_images": len(images_b64),
@@ -136,14 +140,15 @@ class TextToImageRequest(BaseModel):
     height: int = Field(
         default=1024, gt=0, le=2048, description="Image height in pixels"
     )
-    width: int = Field(default=1024, gt=0, le=2048, description="Image width in pixels")
+    width: int = Field(
+        default=1024, gt=0, le=2048, description="Image width in pixels"
+    )
     num_inference_steps: int = Field(
-        default=40, gt=0, le=100, description="Number of denoising steps"
+        default=4, gt=0, le=50, description="Number of denoising steps (FLUX.2-klein is 4-step distilled)"
     )
     guidance_scale: float = Field(
-        default=5.0, ge=0, le=20, description="Guidance scale (CFG)"
+        default=1.0, ge=0, le=20, description="Guidance scale (CFG); 1.0 recommended for distilled model"
     )
-    negative_prompt: Optional[str] = Field(default=None, description="Negative prompt")
     num_images_per_prompt: int = Field(
         default=1, ge=1, le=4, description="Number of images to generate"
     )
@@ -151,15 +156,15 @@ class TextToImageRequest(BaseModel):
 
 class ImageResponse(BaseModel):
     status: str
-    images: Optional[list[str]] = None
+    images: Optional[List[str]] = None
     metadata: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     error_type: Optional[str] = None
 
 
-class SDXLServer(BaseFastAPIServer):
+class FLUX2KleinServer(BaseFastAPIServer):
     def __init__(self, model_name: str = DEFAULT_MODEL, **kwargs):
-        self._engine = SDXLEngine(model_name)
+        self._engine = FLUX2KleinEngine(model_name)
         super().__init__(engines=[self._engine], **kwargs)
 
     def _register_routes(self) -> None:
@@ -172,7 +177,6 @@ class SDXLServer(BaseFastAPIServer):
                 width=request.width,
                 num_inference_steps=request.num_inference_steps,
                 guidance_scale=request.guidance_scale,
-                negative_prompt=request.negative_prompt,
                 num_images_per_prompt=request.num_images_per_prompt,
             )
             if result["status"] == "error":
@@ -183,14 +187,14 @@ class SDXLServer(BaseFastAPIServer):
 
 
 DEFAULT_HOST = "0.0.0.0"
-DEFAULT_PORT = 8002
+DEFAULT_PORT = 8003
 DEFAULT_IDLE_TIMEOUT = 300
 DEFAULT_IDLE_CHECK_INTERVAL = 30
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="SDXL FastAPI Server - Text-to-Image Generation Service",
+        description="FLUX.2-klein-9B FastAPI Server - Text-to-Image Generation Service",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -229,14 +233,14 @@ def main():
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler("sdxl_server.log"),
+            logging.FileHandler("flux2_klein_server.log"),
         ],
     )
     log = logging.getLogger(__name__)
     log.setLevel(getattr(logging, args.log_level))
 
     log.info("=" * 60)
-    log.info("SDXL Server Configuration")
+    log.info("FLUX.2-klein-9B Server Configuration")
     log.info("=" * 60)
     log.info(f"Host: {args.host}")
     log.info(f"Port: {args.port}")
@@ -246,7 +250,7 @@ def main():
     log.info(f"Idle Check Interval: {args.idle_check_interval}s")
     log.info("=" * 60)
 
-    server = SDXLServer(
+    server = FLUX2KleinServer(
         model_name=args.model,
         host=args.host,
         port=args.port,

@@ -38,11 +38,8 @@ bash scripts/start-services.sh --help
 # 启动所有服务
 bash scripts/start-services.sh --all
 
-# 启动指定服务
-bash scripts/start-services.sh --sam3 --trellis
-
-# 调整日志级别
-bash scripts/start-services.sh --all --log-level DEBUG
+# 启动指定服务并指定端口
+bash scripts/start-services.sh --sam3:8014 --trellis:8010
 ```
 
 启动后服务运行在 tmux session `model-haven` 中，关闭终端不影响运行。

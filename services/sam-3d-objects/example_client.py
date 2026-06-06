@@ -88,7 +88,7 @@ def main():
     )
 
     parser.add_argument("--host", type=str, default="localhost", help="Server host")
-    parser.add_argument("--port", type=int, default=8003, help="Server port")
+    parser.add_argument("--port", type=int, default=8005, help="Server port")
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 

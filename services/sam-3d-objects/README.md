@@ -4,7 +4,7 @@
 
 **环境要求：** NVIDIA GPU + CUDA 12.1, Python 3.11
 
-**默认端口：** 8003
+**默认端口：** 8005
 
 ## 安装
 
@@ -21,13 +21,13 @@ bash setup.bash
 uv run main.py
 
 # 自定义配置
-uv run main.py --host 0.0.0.0 --port 8003 --idle-timeout 600
+uv run main.py --host 0.0.0.0 --port 8005 --idle-timeout 600
 ```
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--host` | `0.0.0.0` | 服务绑定地址 |
-| `--port` | `8003` | 监听端口 |
+| `--port` | `8005` | 监听端口 |
 | `--config-path` | `checkpoints/pipeline.yaml` | pipeline 配置 YAML |
 | `--idle-timeout` | `300` | 空闲超时秒数 |
 | `--idle-check-interval` | `30` | 空闲检查间隔秒数 |
@@ -80,11 +80,11 @@ uv run main.py --host 0.0.0.0 --port 8003 --idle-timeout 600
 
 ```bash
 # 健康检查
-uv run example_client.py --host localhost --port 8003 health
+uv run example_client.py --host localhost --port 8005 health
 
 # 从图像和掩码生成 3D
-uv run example_client.py --port 8003 generate --image object.png --mask mask.png
+uv run example_client.py --port 8005 generate --image object.png --mask mask.png
 
 # 指定种子和输出路径（同时生成 result.ply 和 result.glb）
-uv run example_client.py --port 8003 generate --image object.png --mask mask.png --seed 123 --output result
+uv run example_client.py --port 8005 generate --image object.png --mask mask.png --seed 123 --output result
 ```

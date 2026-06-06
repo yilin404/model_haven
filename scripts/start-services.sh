@@ -24,9 +24,11 @@ find_venv() {
 
 # Build associative arrays: name → dir
 declare -A SVC_DIR
+declare -A SVC_PORT
 while IFS= read -r svc_path; do
     name=$(basename "$svc_path")
     SVC_DIR["$name"]="$svc_path"
+    SVC_PORT["$name"]="$(awk '/^DEFAULT_PORT[[:space:]]*=/ {print $3; exit}' "$svc_path/main.py")"
 done < <(discover_services)
 
 if [[ ${#SVC_DIR[@]} -eq 0 ]]; then
@@ -46,39 +48,60 @@ usage() {
     echo "Available services (auto-discovered):"
     local svc
     for svc in "${ALL_SERVICES[@]}"; do
-        echo "  --$svc"
+        echo "  --$svc:${SVC_PORT[$svc]}"
     done
     echo ""
     echo "Options:"
-    echo "  --all              Start all services"
-    echo "  --{service_name}   Start a specific service (see list above)"
-    echo "  --log-level LEVEL  Set log level for all services (default: INFO)"
-    echo "  -h, --help         Show this help message"
+    echo "  --all                    Start all services on their default ports"
+    echo "  --{service_name}:{port}  Start a specific service on the given port"
+    echo "  -h, --help               Show this help message"
     exit 1
 }
 
 # Parse arguments
 REQUESTED=()
-LOG_LEVEL="INFO"
+declare -A REQUESTED_PORT
+
+add_requested() {
+    local name="$1"
+    local port="$2"
+
+    if [[ ! -v "SVC_DIR[$name]" ]]; then
+        echo "Unknown service: $name"
+        echo "Available services: ${ALL_SERVICES[*]}"
+        exit 1
+    fi
+
+    if [[ ! "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+        echo "Invalid port for $name: $port"
+        exit 1
+    fi
+
+    REQUESTED+=("$name")
+    REQUESTED_PORT["$name"]="$port"
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --all)
-            REQUESTED=("${ALL_SERVICES[@]}")
+            for name in "${ALL_SERVICES[@]}"; do
+                add_requested "$name" "${SVC_PORT[$name]}"
+            done
             shift
             ;;
         -h|--help)
             usage
             ;;
         --*)
-            name="${1#--}"
-            if [[ -v "SVC_DIR[$name]" ]]; then
-                REQUESTED+=("$name")
-            else
-                echo "Unknown service: $name"
-                echo "Available services: ${ALL_SERVICES[*]}"
+            spec="${1#--}"
+            if [[ "$spec" != *:* ]]; then
+                echo "Service options must include a port: --{service_name}:{port}"
+                echo "Example: $0 --sam3:8014 --trellis:8010"
                 exit 1
             fi
+            name="${spec%%:*}"
+            port="${spec#*:}"
+            add_requested "$name" "$port"
             shift
             ;;
         *)
@@ -100,26 +123,27 @@ if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
     exit 1
 fi
 
-echo "Starting model_haven services (log level: $LOG_LEVEL)"
+echo "Starting model_haven services"
 echo ""
 
 first=true
 for name in "${REQUESTED[@]}"; do
     svc_dir="${SVC_DIR[$name]}"
+    port="${REQUESTED_PORT[$name]}"
     if ! venv_path=$(find_venv "$svc_dir"); then
         echo "WARNING: $name — no .venv found (checked up to 2 parent dirs) — run setup.bash first"
         continue
     fi
 
-    echo "  starting $name ..."
+    echo "  starting $name on port $port ..."
 
     if $first; then
         tmux new-session -d -s "$SESSION_NAME" -n "$name" -c "$svc_dir" \
-            "uv run -- python main.py --log-level $LOG_LEVEL"
+            "uv run -- python main.py --port $port"
         first=false
     else
         tmux new-window -t "$SESSION_NAME" -n "$name" -c "$svc_dir" \
-            "uv run -- python main.py --log-level $LOG_LEVEL"
+            "uv run -- python main.py --port $port"
     fi
 done
 

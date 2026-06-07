@@ -45,6 +45,7 @@ class Sam3Engine(ModelEngine):
 
     def _load_impl(self) -> None:
         self.gpu_id = select_free_gpu()
+        torch.cuda.set_device(self.gpu_id)
         self.model = build_sam3_image_model(
             device="cpu",
             load_from_HF=False,
@@ -75,6 +76,8 @@ class Sam3Engine(ModelEngine):
         text_prompt: str,
         confidence_threshold: Optional[float],
     ) -> Dict[str, Any]:
+        torch.cuda.set_device(self.gpu_id)
+
         old_threshold = self.processor.confidence_threshold
         if confidence_threshold is not None:
             self.processor.set_confidence_threshold(confidence_threshold)

@@ -85,9 +85,9 @@ class SAM3DObjectsEngine(ModelEngine):
                 seed,
                 stage1_only=False,
                 with_mesh_postprocess=False,
-                with_texture_baking=False,
+                with_texture_baking=True,
                 with_layout_postprocess=False,
-                use_vertex_color=True,
+                use_vertex_color=False,
             )
             generation_time = time.time() - start_time
 

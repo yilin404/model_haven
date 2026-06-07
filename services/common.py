@@ -9,6 +9,7 @@ Shared infrastructure for GPU-backed FastAPI model servers.
 import abc
 import asyncio
 import enum
+import gc
 import logging
 import time
 from contextlib import asynccontextmanager, suppress
@@ -101,6 +102,28 @@ class ModelEngine(abc.ABC):
     # ------------------------------------------------------------------
     # Fully implemented
     # ------------------------------------------------------------------
+    @staticmethod
+    def _is_cuda_oom(error: Any) -> bool:
+        text = str(error).lower()
+        return "cuda" in text and ("out of memory" in text or "cuda oom" in text)
+
+    def _clear_cuda_cache(self, gpu_id: Optional[int] = None) -> None:
+        gc.collect()
+        if not torch.cuda.is_available():
+            return
+
+        device_ids = [gpu_id] if gpu_id is not None else range(torch.cuda.device_count())
+        for device_id in device_ids:
+            if device_id is None:
+                continue
+            with torch.cuda.device(device_id):
+                with suppress(Exception):
+                    torch.cuda.synchronize(device_id)
+                torch.cuda.empty_cache()
+                if hasattr(torch.cuda, "ipc_collect"):
+                    with suppress(Exception):
+                        torch.cuda.ipc_collect()
+
     async def ensure_loaded(self) -> None:
         """Double-check locking lazy load."""
         async with self.state_lock:
@@ -113,6 +136,12 @@ class ModelEngine(abc.ABC):
                 self.state = ModelState.LOADED
                 logger.info(f"[{self.name}] LOADING -> LOADED")
             except Exception as e:
+                gpu_id = self.gpu_id
+                with suppress(Exception):
+                    self._unload_impl()
+                self.gpu_id = None
+                self._clear_cuda_cache(gpu_id)
+
                 self.state = ModelState.NOT_LOADED
                 logger.error(f"[{self.name}] Failed to load: {e}")
                 raise RuntimeError(f"Failed to load {self.name}: {e}") from e
@@ -140,7 +169,7 @@ class ModelEngine(abc.ABC):
             except Exception as e:
                 logger.error(f"[{self.name}] Unload failed: {e}")
             finally:
-                torch.cuda.empty_cache()
+                self._clear_cuda_cache(gpu_id)
                 self.state = ModelState.NOT_LOADED
 
             if gpu_id is not None and mem_before is not None:
@@ -164,6 +193,7 @@ class ModelEngine(abc.ABC):
                 "http_status": 503,
             }
 
+        oom_detected = False
         try:
             async with self.inference_lock:
                 result = await asyncio.to_thread(
@@ -171,13 +201,27 @@ class ModelEngine(abc.ABC):
                 )
         except Exception as e:
             logger.error(f"[{self.name}] Inference failed: {e}")
+            oom_detected = self._is_cuda_oom(e)
             result = {
                 "status": "error",
                 "error": str(e),
                 "error_type": type(e).__name__,
             }
+        finally:
+            self.last_activity = time.monotonic()
+            self._clear_cuda_cache(self.gpu_id)
 
-        self.last_activity = time.monotonic()
+        if result.get("status") == "error" and self._is_cuda_oom(
+            result.get("error", "")
+        ):
+            oom_detected = True
+
+        if oom_detected:
+            logger.warning(
+                f"[{self.name}] CUDA OOM detected; unloading model to recover memory"
+            )
+            await self.ensure_unloaded()
+
         return result
 
     def should_idle_unload(self, idle_timeout: int) -> bool:

@@ -46,13 +46,16 @@ class FLUX2KleinEngine(ModelEngine):
 
     def _load_impl(self) -> None:
         self.gpu_id = select_free_gpu()
-        logger.info(f"Loading FLUX.2-klein-9B from {self.model_name} ...")
+        torch.cuda.set_device(self.gpu_id)
+        logger.info(
+            f"Loading FLUX.2-klein-9B from {self.model_name} on cuda:{self.gpu_id} ..."
+        )
         self.pipeline = Flux2KleinPipeline.from_pretrained(
             self.model_name,
             torch_dtype=torch.bfloat16,
         )
         # CPU offload is mandatory for 24GB GPUs (model raw footprint ~29GB)
-        self.pipeline.enable_model_cpu_offload()
+        self.pipeline.enable_model_cpu_offload(gpu_id=self.gpu_id)
         logger.info("Pipeline loaded with model_cpu_offload enabled")
 
     def _unload_impl(self) -> None:
@@ -79,8 +82,9 @@ class FLUX2KleinEngine(ModelEngine):
         start_time = time.monotonic()
 
         try:
+            device = f"cuda:{self.gpu_id}"
             generator = (
-                torch.Generator(device="cuda").manual_seed(seed)
+                torch.Generator(device=device).manual_seed(seed)
                 if seed is not None
                 else None
             )

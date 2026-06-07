@@ -40,13 +40,17 @@ class SDXLEngine(ModelEngine):
 
     def _load_impl(self) -> None:
         self.gpu_id = select_free_gpu()
+        torch.cuda.set_device(self.gpu_id)
+        logger.info(
+            f"Loading SDXL from {self.model_name} on cuda:{self.gpu_id} ..."
+        )
         self.pipeline = StableDiffusionXLPipeline.from_pretrained(
             self.model_name,
             torch_dtype=torch.float16,
             variant="fp16",
             use_safetensors=True,
-        ).to(f"cuda:{self.gpu_id}")
-        self.pipeline.enable_model_cpu_offload()
+        )
+        self.pipeline.enable_model_cpu_offload(gpu_id=self.gpu_id)
 
     def _unload_impl(self) -> None:
         if self.pipeline is None:

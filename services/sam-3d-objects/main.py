@@ -50,7 +50,9 @@ def _patch_render_multiview_gsplat() -> None:
         render_utils, "_model_haven_gsplat_render_multiview", None
     )
     if patched_render_multiview is None:
-        render_utils._model_haven_original_render_multiview = render_utils.render_multiview
+        render_utils._model_haven_original_render_multiview = (
+            render_utils.render_multiview
+        )
 
         def patched_render_multiview(sample, resolution=512, nviews=30):
             r = 2
@@ -129,10 +131,9 @@ class SAM3DObjectsEngine(ModelEngine):
                 image,
                 mask,
                 seed,
-                stage1_only=False,
-                with_mesh_postprocess=False,
+                with_mesh_postprocess=True,
                 with_texture_baking=True,
-                with_layout_postprocess=False,
+                with_layout_postprocess=True,
                 use_vertex_color=False,
             )
             generation_time = time.time() - start_time
@@ -141,12 +142,9 @@ class SAM3DObjectsEngine(ModelEngine):
             output["gs"].save_ply(ply_buffer)
             ply_bytes = ply_buffer.getvalue()
 
-            glb_mesh = output.get("glb")
-            glb_bytes = None
-            if glb_mesh is not None:
-                glb_buffer = io.BytesIO()
-                glb_mesh.export(glb_buffer, file_type="glb")
-                glb_bytes = glb_buffer.getvalue()
+            glb_buffer = io.BytesIO()
+            output["glb"].export(glb_buffer, file_type="glb")
+            glb_bytes = glb_buffer.getvalue()
 
             rotation = output["rotation"].cpu().numpy().tolist()
             translation = output["translation"].cpu().numpy().tolist()
@@ -160,7 +158,7 @@ class SAM3DObjectsEngine(ModelEngine):
             return {
                 "status": "success",
                 "ply_data": base64.b64encode(ply_bytes).decode("utf-8"),
-                "glb_data": base64.b64encode(glb_bytes).decode("utf-8") if glb_bytes else None,
+                "glb_data": base64.b64encode(glb_bytes).decode("utf-8"),
                 "metadata": {
                     "generation_time": round(generation_time, 2),
                     "rotation": rotation,

@@ -34,6 +34,9 @@ uv pip install --no-build-isolation --force-reinstall --no-cache -e '../../deps/
 uv pip install --no-build-isolation -e '../../deps/sam-3d-objects[inference]' \
   -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html
 
+# Install nvdiffrast for SAM 3D Objects texture baking.
+uv pip install --no-build-isolation "git+https://github.com/NVlabs/nvdiffrast.git"
+
 # Patch hydra (required by official setup.md — fixes hydra 1.3.2 instantiate() bug)
 uv run ../../deps/sam-3d-objects/patching/hydra
 

@@ -40,6 +40,51 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONFIG_PATH = "checkpoints/pipeline.yaml"
 
 
+def _patch_render_multiview_gsplat() -> None:
+    from sam3d_objects.model.backbone.tdfy_dit.utils import (
+        postprocessing_utils,
+        render_utils,
+    )
+
+    patched_render_multiview = getattr(
+        render_utils, "_model_haven_gsplat_render_multiview", None
+    )
+    if patched_render_multiview is None:
+        render_utils._model_haven_original_render_multiview = render_utils.render_multiview
+
+        def patched_render_multiview(sample, resolution=512, nviews=30):
+            r = 2
+            fov = 40
+            cams = [
+                render_utils.sphere_hammersley_sequence(i, nviews)
+                for i in range(nviews)
+            ]
+            yaws = [cam[0] for cam in cams]
+            pitchs = [cam[1] for cam in cams]
+            extrinsics, intrinsics = (
+                render_utils.yaw_pitch_r_fov_to_extrinsics_intrinsics(
+                    yaws, pitchs, r, fov
+                )
+            )
+            res = render_utils.render_frames(
+                sample,
+                extrinsics,
+                intrinsics,
+                {
+                    "resolution": resolution,
+                    "bg_color": (0, 0, 0),
+                    "backend": "gsplat",
+                },
+            )
+            return res["color"], extrinsics, intrinsics
+
+        render_utils._model_haven_gsplat_render_multiview = patched_render_multiview
+        render_utils.render_multiview = patched_render_multiview
+        logger.info("Patched SAM 3D Objects render_multiview to use gsplat backend")
+
+    postprocessing_utils.render_multiview = patched_render_multiview
+
+
 class SAM3DObjectsEngine(ModelEngine):
     def __init__(self, config_path: str = DEFAULT_CONFIG_PATH):
         super().__init__("model")
@@ -49,13 +94,14 @@ class SAM3DObjectsEngine(ModelEngine):
     def _load_impl(self) -> None:
         self.gpu_id = select_free_gpu()
         torch.cuda.set_device(self.gpu_id)
+        _patch_render_multiview_gsplat()
 
         abs_config = os.path.abspath(
             os.path.join(os.path.dirname(__file__), self._config_path)
         )
         config = OmegaConf.load(abs_config)
         config.compile_model = False
-        config.rendering_engine = "pytorch3d"
+        config.rendering_engine = "nvdiffrast"
         config.workspace_dir = os.path.dirname(abs_config)
 
         self.pipeline = instantiate(config)

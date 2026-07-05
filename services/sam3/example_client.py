@@ -3,7 +3,8 @@
 Example client for SAM3 FastAPI Server
 
 Demonstrates how to call the SAM3 FastAPI server for text-prompted
-image segmentation using the requests library.
+image segmentation using the requests library. Supports one or more
+text prompts per request.
 """
 
 import argparse
@@ -25,16 +26,16 @@ def check_health(base_url: str) -> dict:
 def segment(
     base_url: str,
     image_path: str,
-    text_prompt: str,
+    text_prompts: list[str],
     confidence_threshold: float | None = None,
 ) -> dict:
     """
-    Segment objects in an image using a text prompt.
+    Segment objects in an image using one or more text prompts.
 
     Args:
         base_url: Server base URL
         image_path: Path to input image file
-        text_prompt: Text prompt for segmentation
+        text_prompts: One or more text prompts for segmentation
         confidence_threshold: Confidence threshold override
 
     Returns:
@@ -45,12 +46,15 @@ def segment(
 
     payload = {
         "image": image_b64,
-        "text_prompt": text_prompt,
+        "text_prompts": text_prompts,
     }
     if confidence_threshold is not None:
         payload["confidence_threshold"] = confidence_threshold
 
-    print(f"Sending segmentation request: '{text_prompt}'")
+    print(
+        f"Sending segmentation request with {len(text_prompts)} prompt(s): "
+        f"{text_prompts}"
+    )
     start_time = time.time()
 
     resp = requests.post(f"{base_url}/segment", json=payload, timeout=120)
@@ -66,6 +70,9 @@ def save_masks(response: dict, output_dir: str) -> None:
     """
     Save segmentation masks from response to files.
 
+    The response is grouped per prompt; masks for prompt p are saved as
+    output_dir/prompt{p}_mask{m:03d}.png.
+
     Args:
         response: Response dictionary from server
         output_dir: Directory to save mask PNGs
@@ -76,21 +83,29 @@ def save_masks(response: dict, output_dir: str) -> None:
 
     os.makedirs(output_dir, exist_ok=True)
 
+    results = response.get("results", [])
     metadata = response.get("metadata", {})
-    masks_b64 = response.get("masks", [])
-    boxes = response.get("boxes", [])
-    scores = response.get("scores", [])
+    total_masks = 0
 
-    for i, mask_b64 in enumerate(masks_b64):
-        mask_bytes = base64.b64decode(mask_b64)
-        path = os.path.join(output_dir, f"mask_{i:03d}.png")
-        with open(path, "wb") as f:
-            f.write(mask_bytes)
-        score = scores[i] if i < len(scores) else "N/A"
-        box = boxes[i] if i < len(boxes) else "N/A"
-        print(f"  mask_{i:03d}.png (score: {score:.4f}, box: {box})")
+    for p, item in enumerate(results):
+        prompt = item.get("text_prompt", f"prompt{p}")
+        masks_b64 = item.get("masks", [])
+        boxes = item.get("boxes", [])
+        scores = item.get("scores", [])
+        num = item.get("num_objects", len(masks_b64))
 
-    print(f"\nSaved {len(masks_b64)} masks to {output_dir}/")
+        print(f"\n[prompt {p}] '{prompt}': {num} object(s)")
+        for i, mask_b64 in enumerate(masks_b64):
+            mask_bytes = base64.b64decode(mask_b64)
+            path = os.path.join(output_dir, f"prompt{p}_mask{i:03d}.png")
+            with open(path, "wb") as f:
+                f.write(mask_bytes)
+            score_str = f"{scores[i]:.4f}" if i < len(scores) else "N/A"
+            box = boxes[i] if i < len(boxes) else None
+            print(f"  prompt{p}_mask{i:03d}.png (score: {score_str}, box: {box})")
+        total_masks += len(masks_b64)
+
+    print(f"\nSaved {total_masks} mask(s) to {output_dir}/")
     print(f"Generation time: {metadata.get('generation_time', 'N/A')}s")
     print(f"Image size: {metadata.get('image_size', 'N/A')}")
     print(f"Confidence threshold: {metadata.get('confidence_threshold', 'N/A')}")
@@ -119,7 +134,11 @@ def main():
         "--image", type=str, required=True, help="Path to input image"
     )
     seg_parser.add_argument(
-        "--text", type=str, required=True, help="Text prompt for segmentation"
+        "--text",
+        type=str,
+        nargs="+",
+        required=True,
+        help="One or more text prompts for segmentation (e.g. --text cat dog car)",
     )
     seg_parser.add_argument(
         "--confidence-threshold",
@@ -161,14 +180,14 @@ def main():
         print("=" * 60)
         print(f"Server: {base_url}")
         print(f"Image: {args.image}")
-        print(f"Prompt: {args.text}")
+        print(f"Prompts ({len(args.text)}): {args.text}")
         print(f"Output: {args.output_dir}/")
         print("=" * 60)
 
         response = segment(
             base_url=base_url,
             image_path=args.image,
-            text_prompt=args.text,
+            text_prompts=args.text,
             confidence_threshold=args.confidence_threshold,
         )
         if response["status"] == "success":

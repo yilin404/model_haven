@@ -3,7 +3,8 @@
 SAM3 FastAPI Server - Text-Prompted Image Segmentation Service
 
 A FastAPI-based server that wraps Meta AI's SAM3 (Segment Anything Model 3)
-for text-prompted image segmentation.
+for text-prompted image segmentation. Supports one or more text prompts per
+request via native batched inference (one forward pass for N prompts).
 """
 
 import argparse
@@ -13,7 +14,7 @@ import os
 import sys
 import time
 from io import BytesIO
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 import torch
@@ -22,7 +23,21 @@ from PIL import Image as PILImage
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from sam3.model_builder import build_sam3_image_model
-from sam3.model.sam3_image_processor import Sam3Processor
+from sam3.train.transforms.basic_for_api import (
+    ComposeAPI,
+    NormalizeAPI,
+    RandomResizeAPI,
+    ToTensorAPI,
+)
+from sam3.eval.postprocessors import PostProcessImage
+from sam3.train.data.sam3_image_dataset import (
+    Datapoint,
+    FindQueryLoaded,
+    Image as SAMImage,
+    InferenceMetadata,
+)
+from sam3.train.data.collator import collate_fn_api
+from sam3.model.utils.misc import copy_data_to_device
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from common import BaseFastAPIServer, ModelEngine, select_free_gpu
@@ -34,6 +49,10 @@ logger = logging.getLogger(__name__)
 # ModelEngine
 # ===========================================================================
 DEFAULT_CHECKPOINT_PATH = "./checkpoints/sam3.pt"
+# Inference resolution and default confidence threshold match the official
+# batched-inference demo (deps/sam3/examples/sam3_image_batched_inference.ipynb).
+DEFAULT_INFERENCE_RESOLUTION = 1008
+DEFAULT_CONFIDENCE_THRESHOLD = 0.5
 
 
 class Sam3Engine(ModelEngine):
@@ -41,26 +60,37 @@ class Sam3Engine(ModelEngine):
         super().__init__("model")
         self.checkpoint_path = checkpoint_path
         self.model = None
-        self.processor: Optional[Sam3Processor] = None
+        self.transform = None  # built once in _load_impl and reused
 
     def _load_impl(self) -> None:
         self.gpu_id = select_free_gpu()
         torch.cuda.set_device(self.gpu_id)
+        # Build on CPU, load checkpoint, then move to GPU (matches prior behaviour).
         self.model = build_sam3_image_model(
             device="cpu",
             load_from_HF=False,
             checkpoint_path=self.checkpoint_path,
         )
         self.model = self.model.to(f"cuda:{self.gpu_id}")
-        self.processor = Sam3Processor(self.model, device=f"cuda:{self.gpu_id}")
+        # Image preprocessing pipeline (resize -> tensor -> normalize to [-1, 1]).
+        self.transform = ComposeAPI(
+            transforms=[
+                RandomResizeAPI(
+                    sizes=DEFAULT_INFERENCE_RESOLUTION,
+                    max_size=DEFAULT_INFERENCE_RESOLUTION,
+                    square=True,
+                    consistent_transform=False,
+                ),
+                ToTensorAPI(),
+                NormalizeAPI(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+            ]
+        )
 
     def _unload_impl(self) -> None:
-        if self.processor is not None:
-            del self.processor
-            self.processor = None
         if self.model is not None:
             del self.model
             self.model = None
+        self.transform = None
 
     @staticmethod
     def _encode_mask_as_png(mask_bool: np.ndarray) -> str:
@@ -73,56 +103,133 @@ class Sam3Engine(ModelEngine):
     def _run_inference_impl(
         self,
         image: PILImage.Image,
-        text_prompt: str,
+        text_prompts: list[str],
         confidence_threshold: Optional[float],
     ) -> Dict[str, Any]:
         torch.cuda.set_device(self.gpu_id)
+        threshold = (
+            confidence_threshold
+            if confidence_threshold is not None
+            else DEFAULT_CONFIDENCE_THRESHOLD
+        )
 
-        old_threshold = self.processor.confidence_threshold
-        if confidence_threshold is not None:
-            self.processor.set_confidence_threshold(confidence_threshold)
-
-        logger.info(f"Segmenting image with prompt: '{text_prompt[:80]}'")
+        logger.info(
+            f"Segmenting image with {len(text_prompts)} prompt(s): {text_prompts}"
+        )
         start_time = time.time()
 
         try:
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                state = self.processor.set_image(image)
-                state = self.processor.set_text_prompt(text_prompt, state)
+            w, h = image.size
+            # 1) Build a Datapoint holding a single image plus N text prompts.
+            dp = Datapoint(
+                find_queries=[],
+                images=[SAMImage(data=image, objects=[], size=[h, w])],
+            )
+            for i, txt in enumerate(text_prompts):
+                dp.find_queries.append(
+                    FindQueryLoaded(
+                        query_text=txt,
+                        image_id=0,
+                        object_ids_output=[],
+                        is_exhaustive=True,
+                        query_processing_order=0,
+                        inference_metadata=InferenceMetadata(
+                            coco_image_id=i + 1,
+                            original_image_id=i + 1,
+                            original_category_id=1,
+                            original_size=[w, h],
+                            object_id=0,
+                            frame_index=0,
+                        ),
+                    )
+                )
 
-            masks = state["masks"].cpu().to(torch.uint8).numpy()
-            boxes = state["boxes"].cpu().float().numpy()
-            scores = state["scores"].cpu().float().numpy()
-
-            masks_b64 = [self._encode_mask_as_png(m) for m in masks]
-
-            generation_time = time.time() - start_time
-            metadata = {
-                "text_prompt": text_prompt,
-                "confidence_threshold": self.processor.confidence_threshold,
-                "num_objects": len(masks_b64),
-                "generation_time": round(generation_time, 2),
-                "image_size": f"{image.width}x{image.height}",
-            }
-
-            logger.info(
-                f"Segmentation complete in {generation_time:.2f}s, "
-                f"{len(masks_b64)} object(s) found"
+            # 2) transform -> collate -> move to device.
+            dp = self.transform(dp)
+            batch = collate_fn_api([dp], dict_key="dummy")["dummy"]
+            batch = copy_data_to_device(
+                batch, torch.device(f"cuda:{self.gpu_id}"), non_blocking=True
             )
 
+            # 3) Single batched forward (inference_mode + bf16 autocast).
+            with torch.inference_mode(), torch.autocast(
+                device_type="cuda", dtype=torch.bfloat16
+            ):
+                output = self.model(batch)
+
+            # 4) Postprocess; PostProcessImage is stateless, so build it per
+            #    request to apply this request's confidence threshold directly.
+            postprocessor = PostProcessImage(
+                max_dets_per_img=-1,
+                iou_type="segm",
+                use_original_sizes_box=True,
+                use_original_sizes_mask=True,
+                convert_mask_to_rle=False,
+                detection_threshold=threshold,
+                to_cpu=False,
+            )
+            results = postprocessor.process_results(output, batch.find_metadatas)
+
+            # 5) Group results by prompt and encode each mask to base64 PNG.
+            grouped = []
+            for i, txt in enumerate(text_prompts):
+                r = results.get(i + 1)
+                if r is None or len(r["scores"]) == 0:
+                    grouped.append(
+                        {
+                            "text_prompt": txt,
+                            "masks": [],
+                            "boxes": [],
+                            "scores": [],
+                            "num_objects": 0,
+                        }
+                    )
+                    continue
+                # Cast to fp32 before numpy: outputs are bf16 under autocast,
+                # and numpy does not support bfloat16.
+                scores_np = r["scores"].float().cpu().numpy()
+                boxes_np = r["boxes"].float().cpu().numpy()
+                masks_t = r["masks"]  # shape [N, 1, H, W], bool
+                masks_b64 = [
+                    self._encode_mask_as_png(masks_t[j].squeeze(0).cpu().numpy())
+                    for j in range(len(scores_np))
+                ]
+                grouped.append(
+                    {
+                        "text_prompt": txt,
+                        "masks": masks_b64,
+                        "boxes": boxes_np.tolist(),
+                        "scores": scores_np.tolist(),
+                        "num_objects": len(masks_b64),
+                    }
+                )
+
+            generation_time = time.time() - start_time
+            total = sum(g["num_objects"] for g in grouped)
+            metadata = {
+                "text_prompts": text_prompts,
+                "confidence_threshold": threshold,
+                "num_objects": [g["num_objects"] for g in grouped],
+                "generation_time": round(generation_time, 2),
+                "image_size": f"{w}x{h}",
+            }
+            logger.info(
+                f"Segmentation complete in {generation_time:.2f}s, "
+                f"{total} object(s) across {len(text_prompts)} prompt(s)"
+            )
             return {
                 "status": "success",
-                "masks": masks_b64,
-                "boxes": boxes.tolist(),
-                "scores": scores.tolist(),
+                "results": grouped,
                 "metadata": metadata,
             }
 
         except Exception as e:
             logger.error(f"Segmentation failed: {e}")
-            return {"status": "error", "error": str(e), "error_type": type(e).__name__}
-        finally:
-            self.processor.set_confidence_threshold(old_threshold)
+            return {
+                "status": "error",
+                "error": str(e),
+                "error_type": type(e).__name__,
+            }
 
 
 # ===========================================================================
@@ -135,11 +242,18 @@ class SegmentRequest(BaseModel):
         ...,
         description="Base64-encoded image string and will be decoded to PILImage.Image",
     )
-    text_prompt: str = Field(
-        ..., min_length=1, description="Text prompt for segmentation"
+    text_prompts: Union[str, list[str]] = Field(
+        ...,
+        description=(
+            "Text prompt(s) for segmentation: a single string or a list of "
+            "strings. Multiple prompts are segmented together in one forward pass."
+        ),
     )
     confidence_threshold: Optional[float] = Field(
-        default=None, ge=0, le=1, description="Confidence threshold (default: 0.5)"
+        default=None,
+        ge=0,
+        le=1,
+        description="Confidence threshold shared by all prompts (default: 0.5)",
     )
 
     @field_validator("image", mode="before", json_schema_input_type=str)
@@ -158,12 +272,33 @@ class SegmentRequest(BaseModel):
         except Exception as e:
             raise ValueError(f"Image data is not a valid image format: {e}")
 
+    @field_validator("text_prompts", mode="before")
+    @classmethod
+    def normalize_prompts(cls, v):
+        # Accept a single string and normalize it to a one-element list.
+        if isinstance(v, str):
+            v = [v]
+        if not isinstance(v, list) or len(v) == 0:
+            raise ValueError(
+                "text_prompts must be a non-empty string or list of strings"
+            )
+        for x in v:
+            if not isinstance(x, str) or not x.strip():
+                raise ValueError("each text prompt must be a non-empty string")
+        return v
+
+
+class PromptResult(BaseModel):
+    text_prompt: str
+    masks: list[str]
+    boxes: list[list[float]]
+    scores: list[float]
+    num_objects: int
+
 
 class SegmentResponse(BaseModel):
     status: str
-    masks: Optional[list[str]] = None
-    boxes: Optional[list[list[float]]] = None
-    scores: Optional[list[float]] = None
+    results: Optional[list[PromptResult]] = None
     metadata: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     error_type: Optional[str] = None
@@ -178,7 +313,9 @@ class Sam3Server(BaseFastAPIServer):
         @self._app.post("/segment", response_model=SegmentResponse)
         async def segment(request: SegmentRequest):
             result = await self._engine.run_inference(
-                request.image, request.text_prompt, request.confidence_threshold
+                request.image,
+                request.text_prompts,
+                request.confidence_threshold,
             )
             if result["status"] == "error":
                 raise HTTPException(

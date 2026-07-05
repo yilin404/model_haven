@@ -10,6 +10,3 @@
 [submodule "deps/sam-3d-objects"]
 	path = deps/sam-3d-objects
 	url = https://github.com/facebookresearch/sam-3d-objects.git
-[submodule "deps/particulate"]
-	path = deps/particulate
-	url = https://github.com/RuiningLi/particulate.git

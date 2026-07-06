@@ -10,3 +10,6 @@
 [submodule "deps/sam-3d-objects"]
 	path = deps/sam-3d-objects
 	url = https://github.com/facebookresearch/sam-3d-objects.git
+[submodule "deps/recognize-anything"]
+	path = deps/recognize-anything
+	url = https://github.com/xinyu1205/recognize-anything.git

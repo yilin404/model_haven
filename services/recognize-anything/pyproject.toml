@@ -1,0 +1,7 @@
+[project]
+name = "recognize-anything"
+version = "0.1.0"
+description = "RAM++ open-vocabulary image tagging service"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []

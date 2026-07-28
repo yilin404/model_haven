@@ -21,12 +21,18 @@ uv pip install fastapi uvicorn python-multipart
 # Client & utilities
 uv pip install requests pillow
 
-# Model Checkpoint (huggingface_hub handles LFS + resume reliably; curl truncated on large files)
+# Model Checkpoint via hf-mirror.com (domestic mirror of huggingface.co).
+# HF_ENDPOINT routes Hub traffic through the mirror; appending hf-mirror.com to
+# no_proxy reaches the mirror directly even when a local proxy (e.g. Clash) is
+# active — otherwise the proxied request breaks huggingface_hub metadata
+# validation (FileMetadataError: "Distant resource does not seem to be on huggingface.co").
 if [ -f "checkpoints/.download-complete" ]; then
     echo "Model weights already exist, skipping download"
 else
     mkdir -p checkpoints
     uv pip install huggingface_hub
+    export HF_ENDPOINT=https://hf-mirror.com
+    export no_proxy="${no_proxy:+$no_proxy,}hf-mirror.com"
     uv run -- python -c "from huggingface_hub import hf_hub_download; hf_hub_download('xinyu1205/recognize-anything-plus-model', 'ram_plus_swin_large_14m.pth', local_dir='./checkpoints')"
     touch checkpoints/.download-complete
 fi

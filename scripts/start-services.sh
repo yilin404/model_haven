@@ -139,11 +139,11 @@ for name in "${REQUESTED[@]}"; do
 
     if $first; then
         tmux new-session -d -s "$SESSION_NAME" -n "$name" -c "$svc_dir" \
-            "uv run -- python main.py --port $port"
+            "env HF_HUB_OFFLINE=1 uv run -- python main.py --port $port"
         first=false
     else
         tmux new-window -t "$SESSION_NAME" -n "$name" -c "$svc_dir" \
-            "uv run -- python main.py --port $port"
+            "env HF_HUB_OFFLINE=1 uv run -- python main.py --port $port"
     fi
 done
 

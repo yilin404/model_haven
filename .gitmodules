@@ -13,3 +13,6 @@
 [submodule "deps/recognize-anything"]
 	path = deps/recognize-anything
 	url = https://github.com/xinyu1205/recognize-anything.git
+[submodule "deps/depth-anything-3"]
+	path = deps/depth-anything-3
+	url = https://github.com/ByteDance-Seed/Depth-Anything-3.git

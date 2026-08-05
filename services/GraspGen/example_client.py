@@ -7,13 +7,15 @@ generation from point clouds or meshes using the requests library.
 """
 
 import argparse
-import base64
 import os
 import sys
 import time
 
 import numpy as np
 import requests
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from serialization import NDArrayData
 
 
 def load_point_cloud_from_mesh(mesh_file: str, scale: float = 1.0, num_points: int = 2000) -> np.ndarray:
@@ -85,15 +87,6 @@ def _read_pcd_ascii(path: str) -> np.ndarray:
     return np.array(points, dtype=np.float32)
 
 
-def encode_numpy_array(array: np.ndarray) -> dict:
-    """Encode numpy array to dict format for JSON serialization."""
-    return {
-        "data": base64.b64encode(array.tobytes()).decode("utf-8"),
-        "shape": list(array.shape),
-        "dtype": str(array.dtype),
-    }
-
-
 def grasp_from_numpy(
     base_url: str,
     point_cloud: np.ndarray,
@@ -121,7 +114,7 @@ def grasp_from_numpy(
         Response dictionary from server
     """
     payload = {
-        "point_cloud": encode_numpy_array(point_cloud),
+        "point_cloud": NDArrayData.from_array(point_cloud).model_dump(),
         "num_grasps": num_grasps,
         "topk_num_grasps": topk_num_grasps,
         "grasp_threshold": grasp_threshold,
@@ -215,13 +208,11 @@ def decode_response(response: dict) -> tuple:
     grasps_data = response.get("grasps")
     if grasps_data is None:
         return None, None, "No grasp data in response"
-    grasps_bytes = base64.b64decode(grasps_data["data"])
-    grasps = np.frombuffer(grasps_bytes, dtype=np.float32).reshape(grasps_data["shape"])
+    grasps = NDArrayData.model_validate(grasps_data).to_array()
 
     # Decode confidences
     conf_data = response.get("confidences", {})
-    conf_bytes = base64.b64decode(conf_data["data"])
-    confidences = np.frombuffer(conf_bytes, dtype=np.float32).reshape(conf_data["shape"])
+    confidences = NDArrayData.model_validate(conf_data).to_array()
 
     metadata = response.get("metadata", {})
 

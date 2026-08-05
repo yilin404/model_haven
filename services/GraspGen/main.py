@@ -8,7 +8,6 @@ point clouds or meshes.
 """
 
 import argparse
-import base64
 import logging
 import os
 import sys
@@ -18,13 +17,14 @@ from typing import Any, Dict, Optional
 import numpy as np
 import torch
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, Field
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../deps/GraspGen"))
 from grasp_gen.grasp_server import GraspGenSampler, load_grasp_cfg
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from common import BaseFastAPIServer, ModelEngine, select_free_gpu
+from serialization import NDArrayData
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +57,6 @@ class GraspGenEngine(ModelEngine):
         if self.sampler is not None:
             del self.sampler
             self.sampler = None
-
-    @staticmethod
-    def _encode_numpy_array(array: np.ndarray) -> Dict[str, Any]:
-        return {
-            "data": base64.b64encode(array.tobytes()).decode("utf-8"),
-            "shape": list(array.shape),
-            "dtype": str(array.dtype),
-        }
 
     def _run_inference_impl(
         self,
@@ -115,8 +107,8 @@ class GraspGenEngine(ModelEngine):
 
             return {
                 "status": "success",
-                "grasps": self._encode_numpy_array(grasps_np),
-                "confidences": self._encode_numpy_array(conf_np),
+                "grasps": NDArrayData.from_array(grasps_np),
+                "confidences": NDArrayData.from_array(conf_np),
                 "metadata": {
                     "num_grasps": len(grasps_np),
                     "generation_time": round(generation_time, 2),
@@ -134,18 +126,10 @@ class GraspGenEngine(ModelEngine):
 # ===========================================================================
 # FastAPI Server and Pydantic models
 # ===========================================================================
-class PointCloudData(BaseModel):
-    data: str
-    shape: list[int]
-    dtype: str
-
-
 class GraspGenRequest(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    point_cloud: np.ndarray = Field(
+    point_cloud: NDArrayData = Field(
         ...,
-        description="Point cloud as {data: base64, shape: list, dtype: str} and will be decoded to (N, 3) float32 numpy array",
+        description="Point cloud as {data: base64, shape: list, dtype: str}",
     )
     num_grasps: int = Field(default=200, gt=0, description="Number of grasps to sample")
     topk_num_grasps: int = Field(
@@ -164,24 +148,11 @@ class GraspGenRequest(BaseModel):
         default=True, description="Remove point cloud outliers before inference"
     )
 
-    @field_validator("point_cloud", mode="before", json_schema_input_type=dict)
-    @classmethod
-    def parse_point_cloud(cls, v: dict) -> np.ndarray:
-        if isinstance(v, dict):
-            pc = PointCloudData(**v)
-            raw = base64.b64decode(pc.data, validate=True)
-            arr = np.frombuffer(raw, dtype=pc.dtype).reshape(pc.shape)
-            assert arr.ndim == 2 and arr.shape[1] == 3, (
-                "point_cloud must have shape (N, 3)"
-            )
-            return arr.astype(np.float32, copy=False)
-        raise ValueError("point_cloud must be a dict with {data, shape, dtype}")
-
 
 class GraspResponse(BaseModel):
     status: str
-    grasps: Optional[Dict[str, Any]] = None
-    confidences: Optional[Dict[str, Any]] = None
+    grasps: Optional[NDArrayData] = None
+    confidences: Optional[NDArrayData] = None
     metadata: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     error_type: Optional[str] = None
@@ -195,7 +166,9 @@ class GraspGenServer(BaseFastAPIServer):
     def _register_routes(self) -> None:
         @self._app.post("/generate", response_model=GraspResponse)
         async def generate(request: GraspGenRequest):
-            point_cloud = np.asarray(request.point_cloud, dtype=np.float32)
+            point_cloud = request.point_cloud.to_array().astype(
+                np.float32, copy=False
+            )
 
             if point_cloud.ndim != 2 or point_cloud.shape[1] != 3:
                 raise HTTPException(

@@ -11,7 +11,7 @@ import sys
 import time
 from binascii import Error as BinasciiError
 from io import BytesIO
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal, Optional
 
 import numpy as np
 import torch
@@ -26,7 +26,7 @@ from serialization import NDArrayData
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_NAME = "depth-anything/DA3-LARGE-1.1"
+DEFAULT_MODEL_NAME = "depth-anything/DA3NESTED-GIANT-LARGE-1.1"
 DEFAULT_PROCESS_RES = 504
 MAX_IMAGES = 32
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
@@ -51,9 +51,7 @@ def _decode_image(encoded: str) -> PILImage.Image:
         raise ValueError("image must be valid base64") from exc
 
     if len(raw) > MAX_IMAGE_BYTES:
-        raise ValueError(
-            f"decoded image exceeds the {MAX_IMAGE_BYTES}-byte limit"
-        )
+        raise ValueError(f"decoded image exceeds the {MAX_IMAGE_BYTES}-byte limit")
 
     try:
         image = PILImage.open(BytesIO(raw))
@@ -61,9 +59,7 @@ def _decode_image(encoded: str) -> PILImage.Image:
         raise ValueError("decoded data is not a supported image") from exc
 
     if image.width * image.height > MAX_IMAGE_PIXELS:
-        raise ValueError(
-            f"image exceeds the {MAX_IMAGE_PIXELS}-pixel limit"
-        )
+        raise ValueError(f"image exceeds the {MAX_IMAGE_PIXELS}-pixel limit")
     try:
         image.load()
     except Exception as exc:
@@ -90,16 +86,14 @@ class DepthRequest(BaseModel):
         description="Optional float array with shape (N, 3, 3)",
     )
     process_res: int = Field(default=DEFAULT_PROCESS_RES, ge=128, le=2048)
-    process_res_method: Literal[
-        "upper_bound_resize", "lower_bound_resize"
-    ] = "upper_bound_resize"
+    process_res_method: Literal["upper_bound_resize", "lower_bound_resize"] = (
+        "upper_bound_resize"
+    )
 
     @model_validator(mode="after")
     def validate_camera_payloads(self) -> "DepthRequest":
         if (self.extrinsics is None) != (self.intrinsics is None):
-            raise ValueError(
-                "extrinsics and intrinsics must be provided together"
-            )
+            raise ValueError("extrinsics and intrinsics must be provided together")
         if self.extrinsics is None:
             return self
 
@@ -130,7 +124,7 @@ class DepthResponse(BaseModel):
     confidence: Optional[NDArrayData] = None
     extrinsics: Optional[NDArrayData] = None
     intrinsics: Optional[NDArrayData] = None
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = None
     error: Optional[str] = None
     error_type: Optional[str] = None
 
@@ -144,9 +138,7 @@ class DepthAnythingV3Engine(ModelEngine):
     def _load_impl(self) -> None:
         self.gpu_id = select_free_gpu()
         torch.cuda.set_device(self.gpu_id)
-        logger.info(
-            "Loading %s on cuda:%s", self.model_name, self.gpu_id
-        )
+        logger.info("Loading %s on cuda:%s", self.model_name, self.gpu_id)
         self.model = DepthAnything3.from_pretrained(self.model_name)
         self.model = self.model.to(device=f"cuda:{self.gpu_id}")
         self.model.eval()
@@ -163,7 +155,7 @@ class DepthAnythingV3Engine(ModelEngine):
         intrinsics: Optional[np.ndarray],
         process_res: int,
         process_res_method: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if self.model is None or self.gpu_id is None:
             raise RuntimeError("model is not loaded")
 

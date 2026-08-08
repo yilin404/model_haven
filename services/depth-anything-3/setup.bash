@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-DEFAULT_MODEL_NAME="depth-anything/DA3-LARGE-1.1"
+DEFAULT_MODEL_NAME="depth-anything/DA3NESTED-GIANT-LARGE-1.1"
 MODEL_NAME="${DA3_MODEL_NAME:-$DEFAULT_MODEL_NAME}"
 
 if [ ! -d ".venv" ]; then

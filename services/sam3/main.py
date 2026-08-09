@@ -137,7 +137,7 @@ class Sam3Engine(ModelEngine):
                             coco_image_id=i + 1,
                             original_image_id=i + 1,
                             original_category_id=1,
-                            original_size=[w, h],
+                            original_size=[h, w],
                             object_id=0,
                             frame_index=0,
                         ),

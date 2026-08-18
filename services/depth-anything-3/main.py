@@ -315,7 +315,7 @@ def main() -> None:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler("depth_anything_v3_server.log"),
+            logging.FileHandler(os.path.join(os.path.dirname(__file__), "depth_anything_v3_server.log")),
         ],
     )
 

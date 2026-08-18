@@ -252,7 +252,7 @@ def main():
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler("graspgen_server.log"),
+            logging.FileHandler(os.path.join(os.path.dirname(__file__), "graspgen_server.log")),
         ],
     )
     log = logging.getLogger(__name__)

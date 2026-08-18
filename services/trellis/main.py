@@ -332,7 +332,7 @@ def main():
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler("trellis_server.log"),
+            logging.FileHandler(os.path.join(os.path.dirname(__file__), "trellis_server.log")),
         ],
     )
     log = logging.getLogger(__name__)

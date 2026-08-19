@@ -1,0 +1,7 @@
+# Service log
+p3sam_server.log
+
+# Local virtualenv
+.venv/
+
+__pycache__/

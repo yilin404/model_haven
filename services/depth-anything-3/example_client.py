@@ -76,7 +76,13 @@ def save_prediction(response: dict[str, Any], output_path: str) -> None:
 
     arrays = {
         key: value
-        for key in ("depth", "confidence", "extrinsics", "intrinsics")
+        for key in (
+            "image_rgb",
+            "depth",
+            "confidence",
+            "extrinsics",
+            "intrinsics",
+        )
         if (value := _decode_optional_array(response, key)) is not None
     }
     np.savez_compressed(output_path, **arrays)
@@ -148,4 +154,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -77,7 +77,7 @@ model_haven/
     ├── GraspGen/            # 6-DOF 抓取生成服务
     ├── depth-anything-v3/   # 深度与相机估计服务
     ├── trellis/             # 文本/图像 → 3D 生成服务
-    ├── sam3/                # SAM3 文本提示图像分割服务
+    ├── sam3/                # SAM3 文本/点/框提示图像分割服务
     ├── sam-3d-objects/      # SAM 3D 物体重建服务
     ├── p3-sam/              # P3-SAM 点云级部件分割服务
     └── huggingface/sdxl/    # HuggingFace 模型服务 (SDXL 等)
@@ -246,6 +246,6 @@ if __name__ == "__main__":
 | [GraspGen](services/GraspGen/README.md) | `services/GraspGen/` | 6-DOF 抓取生成 |
 | [Depth Anything V3](services/depth-anything-v3/README.md) | `services/depth-anything-v3/` | 单视图/多视图深度与相机估计 |
 | [SDXL](services/huggingface/sdxl/README.md) | `services/huggingface/sdxl/` | 文本生成图片 |
-| [SAM3](services/sam3/README.md) | `services/sam3/` | 文本提示图像分割 |
+| [SAM3](services/sam3/README.md) | `services/sam3/` | 文本/点/框提示图像分割 |
 | [SAM 3D Objects](services/sam-3d-objects/README.md) | `services/sam-3d-objects/` | 单图像 3D 重建 |
 | [P3-SAM](services/p3-sam/README.md) | `services/p3-sam/` | 点云级 3D 部件分割 |

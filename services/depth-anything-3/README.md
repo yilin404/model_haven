@@ -120,6 +120,7 @@ NumPy 数组统一使用以下无损 JSON 表示：
 ```json
 {
   "status": "success",
+  "image_rgb": {"data": "...", "shape": [1, 504, 672, 3], "dtype": "uint8"},
   "depth": {"data": "...", "shape": [1, 504, 672], "dtype": "float32"},
   "confidence": {"data": "...", "shape": [1, 504, 672], "dtype": "float32"},
   "extrinsics": {"data": "...", "shape": [1, 3, 4], "dtype": "float32"},
@@ -132,6 +133,17 @@ NumPy 数组统一使用以下无损 JSON 表示：
   }
 }
 ```
+
+`image_rgb` 直接来自 DA3 上游 `Prediction.processed_images`，是模型实际预处理后
+的 RGB 图像，而不是服务端按输出尺寸重新缩放的原图。其 shape 为
+`(N, H, W, 3)`、dtype 为 `uint8`，并满足：
+
+```text
+image_rgb.shape[:3] == depth.shape == confidence.shape
+```
+
+因此 `image_rgb`、`depth`、`confidence` 和 `intrinsics` 共用同一个处理后像素
+坐标系。客户端应将 `image_rgb` 作为几何推理使用的基准图像。
 
 第一版不开放服务器文件导出、GLB/PLY 或 Gaussian Splatting。
 

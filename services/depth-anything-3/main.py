@@ -120,13 +120,12 @@ class DepthRequest(BaseModel):
 
 class DepthResponse(BaseModel):
     status: str
+    image_rgb: Optional[NDArrayData] = None
     depth: Optional[NDArrayData] = None
     confidence: Optional[NDArrayData] = None
     extrinsics: Optional[NDArrayData] = None
     intrinsics: Optional[NDArrayData] = None
     metadata: Optional[dict[str, Any]] = None
-    error: Optional[str] = None
-    error_type: Optional[str] = None
 
 
 class DepthAnythingV3Engine(ModelEngine):
@@ -171,6 +170,20 @@ class DepthAnythingV3Engine(ModelEngine):
         generation_time = time.time() - start_time
 
         depth = np.asarray(prediction.depth, dtype=np.float32)
+        if prediction.processed_images is None:
+            raise RuntimeError("DA3 prediction did not contain processed_images")
+        image_rgb = np.asarray(prediction.processed_images)
+        if image_rgb.dtype != np.uint8:
+            raise RuntimeError(
+                "DA3 processed_images must use uint8 dtype, "
+                f"got {image_rgb.dtype}"
+            )
+        expected_image_shape = (*depth.shape, 3)
+        if image_rgb.shape != expected_image_shape:
+            raise RuntimeError(
+                "DA3 processed image and depth shapes are inconsistent: "
+                f"expected {expected_image_shape}, got {image_rgb.shape}"
+            )
         confidence = (
             np.asarray(prediction.conf, dtype=np.float32)
             if prediction.conf is not None
@@ -194,6 +207,7 @@ class DepthAnythingV3Engine(ModelEngine):
         )
         return {
             "status": "success",
+            "image_rgb": NDArrayData.from_array(image_rgb),
             "depth": NDArrayData.from_array(depth),
             "confidence": NDArrayData.from_array(confidence)
             if confidence is not None

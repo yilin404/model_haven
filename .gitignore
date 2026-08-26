@@ -17,6 +17,7 @@ wheels/
 /.claude/
 /CLAUDE.md
 /.codex
+/.zcode
 
 reports/
 /data/

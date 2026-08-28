@@ -1,6 +1,3 @@
-[submodule "deps/trellis"]
-	path = deps/trellis
-	url = https://github.com/microsoft/TRELLIS.git
 [submodule "deps/GraspGen"]
 	path = deps/GraspGen
 	url = https://github.com/NVlabs/GraspGen.git

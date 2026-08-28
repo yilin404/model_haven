@@ -96,7 +96,7 @@ while [[ $# -gt 0 ]]; do
             spec="${1#--}"
             if [[ "$spec" != *:* ]]; then
                 echo "Service options must include a port: --{service_name}:{port}"
-                echo "Example: $0 --sam3:8014 --trellis:8010"
+                echo "Example: $0 --sam3:8004 --depth-anything-3:8006"
                 exit 1
             fi
             name="${spec%%:*}"

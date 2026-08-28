@@ -107,6 +107,10 @@ class SAM3DObjectsEngine(ModelEngine):
         config.workspace_dir = os.path.dirname(abs_config)
 
         self.pipeline = instantiate(config)
+        self.pipeline.models["ss_generator"].half()
+        for embedder in self.pipeline.condition_embedders.values():
+            embedder.half()
+        logger.info("Converted ss_generator and condition embedders to FP16")
 
     def _unload_impl(self) -> None:
         if self.pipeline is not None:

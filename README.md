@@ -10,10 +10,10 @@ AI 模型服务聚合仓库，通过 FastAPI 提供 RESTful 模型推理服务�
 # 1. 初始化子模块
 git submodule update --init --recursive
 
-# 2. 安装并启动某个服务（以 trellis 为例）
-cd services/trellis
+# 2. 安装并启动某个服务（以 sam3 为例）
+cd services/sam3
 bash setup.bash
-uv run main.py --host 0.0.0.0 --port 8000
+uv run main.py --host 0.0.0.0 --port 8004
 
 # 3. 或使用脚本快速启动（自动管理多个服务）
 bash scripts/start-services.sh --all
@@ -39,7 +39,7 @@ bash scripts/start-services.sh --help
 bash scripts/start-services.sh --all
 
 # 启动指定服务并指定端口
-bash scripts/start-services.sh --sam3:8014 --trellis:8010
+bash scripts/start-services.sh --sam3:8004 --depth-anything-3:8006
 ```
 
 启动后服务运行在 tmux session `model-haven` 中，关闭终端不影响运行。
@@ -66,7 +66,6 @@ model_haven/
 ├── deps/                # Git submodule 依赖库
 │   ├── GraspGen/        # NVlabs/GraspGen (6-DOF 抓取生成)
 │   ├── depth-anything-3/ # ByteDance-Seed/Depth-Anything-3 (深度与相机估计)
-│   ├── trellis/         # microsoft/TRELLIS (文本/图像 → 3D)
 │   ├── sam3/            # facebookresearch/sam3 (文本提示图像分割)
 │   ├── sam-3d-objects/  # facebookresearch/sam-3d-objects (单图像 3D 重建)
 │   └── hunyuan3d-part/  # Tencent-Hunyuan/Hunyuan3D-Part (P3-SAM 点级部件分割)
@@ -76,7 +75,6 @@ model_haven/
     ├── serialization.py     # NumPy 数组的共享 JSON wire representation
     ├── GraspGen/            # 6-DOF 抓取生成服务
     ├── depth-anything-v3/   # 深度与相机估计服务
-    ├── trellis/             # 文本/图像 → 3D 生成服务
     ├── sam3/                # SAM3 文本/点/框提示图像分割服务
     ├── sam-3d-objects/      # SAM 3D 物体重建服务
     ├── p3-sam/              # P3-SAM 点云级部件分割服务
@@ -89,11 +87,6 @@ model_haven/
 
 ```bash
 git submodule add <repository_url> deps/<name>
-```
-
-示例：
-```bash
-git submodule add https://github.com/microsoft/TRELLIS.git deps/trellis
 ```
 
 初始化/更新 submodule：
@@ -220,7 +213,7 @@ if __name__ == "__main__":
 }
 ```
 
-`model_state` 为 `Dict[str, str]`，key 为引擎名称，value 为状态。多引擎服务（如 TRELLIS）会有多个 key。
+`model_state` 为 `Dict[str, str]`，key 为引擎名称，value 为状态。若服务组合多个引擎，响应中会包含多个 key。
 
 ---
 
@@ -242,7 +235,6 @@ if __name__ == "__main__":
 
 | 服务 | 路径 | 说明 |
 |------|------|------|
-| [TRELLIS](services/trellis/README.md) | `services/trellis/` | 文本/图像 → 3D |
 | [GraspGen](services/GraspGen/README.md) | `services/GraspGen/` | 6-DOF 抓取生成 |
 | [Depth Anything V3](services/depth-anything-v3/README.md) | `services/depth-anything-v3/` | 单视图/多视图深度与相机估计 |
 | [SDXL](services/huggingface/sdxl/README.md) | `services/huggingface/sdxl/` | 文本生成图片 |

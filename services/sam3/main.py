@@ -108,6 +108,10 @@ class Sam3Engine(ModelEngine):
         self.processor = None
         self.transform = None
 
+        # SAM3 keeps a long-lived autocast context whose cached weight casts
+        # otherwise survive after the model references above are released.
+        torch.clear_autocast_cache()
+
     @staticmethod
     def _encode_mask_as_png(mask_bool: np.ndarray) -> str:
         mask_uint8 = (mask_bool.squeeze().astype(np.uint8)) * 255

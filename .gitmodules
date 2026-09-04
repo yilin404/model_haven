@@ -16,3 +16,6 @@
 [submodule "deps/hunyuan3d-part"]
 	path = deps/hunyuan3d-part
 	url = https://github.com/Tencent-Hunyuan/Hunyuan3D-Part.git
+[submodule "deps/trellis.2"]
+	path = deps/trellis.2
+	url = https://github.com/microsoft/trellis.2.git

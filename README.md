@@ -68,7 +68,8 @@ model_haven/
 │   ├── depth-anything-3/ # ByteDance-Seed/Depth-Anything-3 (深度与相机估计)
 │   ├── sam3/            # facebookresearch/sam3 (文本提示图像分割)
 │   ├── sam-3d-objects/  # facebookresearch/sam-3d-objects (单图像 3D 重建)
-│   └── hunyuan3d-part/  # Tencent-Hunyuan/Hunyuan3D-Part (P3-SAM 点级部件分割)
+│   ├── hunyuan3d-part/  # Tencent-Hunyuan/Hunyuan3D-Part (P3-SAM 点级部件分割)
+│   └── trellis.2/       # microsoft/trellis.2 (图像生成 3D, PBR 纹理网格)
 └── services/            # FastAPI 模型服务
     ├── __init__.py          # 包初始化
     ├── common.py            # ModelEngine + BaseFastAPIServer 基类
@@ -78,6 +79,7 @@ model_haven/
     ├── sam3/                # SAM3 文本/点/框提示图像分割服务
     ├── sam-3d-objects/      # SAM 3D 物体重建服务
     ├── p3-sam/              # P3-SAM 点云级部件分割服务
+    ├── trellis.2/           # TRELLIS.2 图像生成 3D (PBR 纹理网格) 服务
     └── huggingface/sdxl/    # HuggingFace 模型服务 (SDXL 等)
 ```
 
@@ -241,3 +243,4 @@ if __name__ == "__main__":
 | [SAM3](services/sam3/README.md) | `services/sam3/` | 文本/点/框提示图像分割 |
 | [SAM 3D Objects](services/sam-3d-objects/README.md) | `services/sam-3d-objects/` | 单图像 3D 重建 |
 | [P3-SAM](services/p3-sam/README.md) | `services/p3-sam/` | 点云级 3D 部件分割 |
+| [TRELLIS.2](services/trellis.2/README.md) | `services/trellis.2/` | 图像生成 3D（PBR 纹理网格 GLB） |

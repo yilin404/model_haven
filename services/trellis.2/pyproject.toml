@@ -1,0 +1,7 @@
+[project]
+name = "trellis2"
+version = "0.1.0"
+description = "TRELLIS.2 image-to-3D FastAPI server"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []

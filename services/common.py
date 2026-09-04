@@ -168,13 +168,23 @@ class ModelEngine(abc.ABC):
             logger.error(f"[{self.name}] Failed to load: {error}")
             raise RuntimeError(f"Failed to load {self.name}: {error}") from error
 
-    async def ensure_unloaded(self) -> bool:
+    async def ensure_unloaded(self, only_if_idle_for: int) -> bool:
         """Wait for the current model operation and unload the model.
 
+        Args:
+            only_if_idle_for: Minimum idle seconds required before unloading.
+                The idleness check (should_idle_unload) is re-evaluated after
+                operation_lock is acquired, so a request that finishes while
+                we wait for the lock cancels the unload. Pass 0 to unload
+                unconditionally as long as the model is loaded.
+
         Returns:
-            True if this call unloaded a model, or False if it was not loaded.
+            True if this call unloaded a model, or False if it was not loaded
+            or was still within the idle threshold.
         """
         async with self.operation_lock:
+            if not self.should_idle_unload(only_if_idle_for):
+                return False
             return self._ensure_unloaded_locked()
 
     def _ensure_unloaded_locked(self) -> bool:
@@ -345,7 +355,9 @@ class BaseFastAPIServer(abc.ABC):
             """Unload every model engine after its active operation finishes."""
             unloaded = {}
             for engine in self._engines:
-                unloaded[engine.name] = await engine.ensure_unloaded()
+                unloaded[engine.name] = await engine.ensure_unloaded(
+                    only_if_idle_for=0
+                )
 
             return UnloadResponse(
                 status="ok",
@@ -376,7 +388,7 @@ class BaseFastAPIServer(abc.ABC):
 
                 for engine in self._engines:
                     try:
-                        await engine.ensure_unloaded()
+                        await engine.ensure_unloaded(only_if_idle_for=0)
                     except Exception as e:
                         logger.error(f"Shutdown unload failed for {engine.name}: {e}")
 
@@ -431,7 +443,9 @@ class BaseFastAPIServer(abc.ABC):
                 await asyncio.sleep(self.idle_check_interval)
                 for engine in self._engines:
                     if engine.should_idle_unload(self.idle_timeout):
-                        await engine.ensure_unloaded()
+                        await engine.ensure_unloaded(
+                            only_if_idle_for=self.idle_timeout
+                        )
             except asyncio.CancelledError:
                 logger.info("Idle monitor cancelled")
                 break

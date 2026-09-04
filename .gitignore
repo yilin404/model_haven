@@ -23,4 +23,5 @@ reports/
 /data/
 /tests/
 *.log
+/.scratch/
 

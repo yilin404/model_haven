@@ -50,6 +50,7 @@ uv run main.py --host 0.0.0.0 --port 8003 --idle-timeout 600
 |------|------|------|
 | `GET` | `/health` | 健康检查 |
 | `POST` | `/text-to-image` | 文本生成图片 |
+| `POST` | `/image-to-image` | 参考图编辑（FLUX.2 Klein reference conditioning；请求中的 `strength` 仅为客户端兼容保留，会被忽略） |
 
 ## 请求格式
 

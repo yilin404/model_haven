@@ -38,6 +38,34 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "black-forest-labs/FLUX.2-klein-9B"
 
 
+def _decode_base64_image(encoded: str) -> Image.Image:
+    """Decode a base64 PNG/JPEG payload into an RGB PIL image.
+
+    Args:
+        encoded: Base64 string of the image file bytes. Accepts the
+            optional ``data:...;base64,`` data-URL prefix.
+
+    Returns:
+        Decoded image converted to RGB mode.
+
+    Raises:
+        ValueError: If the payload is not valid base64 or not a
+            decodable image.
+    """
+    if "," in encoded:
+        encoded = encoded.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except ValueError as error:
+        # binascii.Error subclasses ValueError, so this also covers it.
+        raise ValueError("image payload is not valid base64") from error
+    try:
+        with Image.open(BytesIO(raw)) as loaded:
+            return loaded.convert("RGB")
+    except Exception as error:
+        raise ValueError("image payload is not a decodable image") from error
+
+
 class FLUX2KleinEngine(ModelEngine):
     def __init__(self, model_name: str = DEFAULT_MODEL):
         super().__init__("model")
@@ -73,9 +101,11 @@ class FLUX2KleinEngine(ModelEngine):
         num_inference_steps: int,
         guidance_scale: float,
         num_images_per_prompt: int,
+        image: Optional[Image.Image] = None,
     ) -> Dict[str, Any]:
+        mode = "image-editing" if image is not None else "text-to-image"
         logger.info(
-            f"Generating image: '{prompt[:80]}' (seed={seed}, "
+            f"Generating image ({mode}): '{prompt[:80]}' (seed={seed}, "
             f"steps={num_inference_steps}, guidance={guidance_scale}, "
             f"size={width}x{height})"
         )
@@ -91,6 +121,7 @@ class FLUX2KleinEngine(ModelEngine):
 
             output = self.pipeline(
                 prompt=prompt,
+                image=image,
                 height=height,
                 width=width,
                 num_inference_steps=num_inference_steps,
@@ -115,6 +146,7 @@ class FLUX2KleinEngine(ModelEngine):
                 "status": "success",
                 "images": images_b64,
                 "metadata": {
+                    "mode": mode,
                     "prompt": prompt,
                     "seed": seed,
                     "generation_time": round(generation_time, 2),
@@ -158,6 +190,56 @@ class TextToImageRequest(BaseModel):
     )
 
 
+class ImageToImageRequest(BaseModel):
+    image: str = Field(
+        ...,
+        min_length=1,
+        description="Base64-encoded input reference image (PNG/JPEG)",
+    )
+    prompt: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Editing instruction; FLUX.2 Klein conditions on it together "
+            "with the reference image"
+        ),
+    )
+    seed: Optional[int] = Field(
+        default=None, description="Random seed for reproducibility"
+    )
+    height: int = Field(
+        default=1024, gt=0, le=2048, description="Output image height in pixels"
+    )
+    width: int = Field(
+        default=1024, gt=0, le=2048, description="Output image width in pixels"
+    )
+    num_inference_steps: int = Field(
+        default=4,
+        gt=0,
+        le=50,
+        description="Number of denoising steps (FLUX.2-klein is 4-step distilled)",
+    )
+    guidance_scale: float = Field(
+        default=1.0,
+        ge=0,
+        le=20,
+        description="Guidance scale (CFG); 1.0 recommended for distilled model",
+    )
+    num_images_per_prompt: int = Field(
+        default=1, ge=1, le=4, description="Number of images to generate"
+    )
+    strength: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Ignored by FLUX.2 Klein: it edits via reference conditioning, "
+            "not strength-based denoising. Accepted only for client "
+            "compatibility."
+        ),
+    )
+
+
 class ImageResponse(BaseModel):
     status: str
     images: Optional[List[str]] = None
@@ -182,6 +264,25 @@ class FLUX2KleinServer(BaseFastAPIServer):
                 num_inference_steps=request.num_inference_steps,
                 guidance_scale=request.guidance_scale,
                 num_images_per_prompt=request.num_images_per_prompt,
+            )
+            if result["status"] == "error":
+                raise HTTPException(
+                    status_code=result.get("http_status", 500), detail=result
+                )
+            return result
+
+        @self._app.post("/image-to-image", response_model=ImageResponse)
+        async def image_to_image(request: ImageToImageRequest):
+            image = _decode_base64_image(request.image)
+            result = await self._engine.run_inference(
+                prompt=request.prompt,
+                seed=request.seed,
+                height=request.height,
+                width=request.width,
+                num_inference_steps=request.num_inference_steps,
+                guidance_scale=request.guidance_scale,
+                num_images_per_prompt=request.num_images_per_prompt,
+                image=image,
             )
             if result["status"] == "error":
                 raise HTTPException(

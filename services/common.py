@@ -42,6 +42,12 @@ class HealthResponse(BaseModel):
     idle_timeout: Optional[int] = None
 
 
+class UnloadResponse(BaseModel):
+    status: str
+    unloaded: Dict[str, bool]
+    model_state: Dict[str, str]
+
+
 # ===========================================================================
 # GPU utility
 # ===========================================================================
@@ -76,11 +82,15 @@ class ModelEngine(abc.ABC):
         _run_inference_impl()  — run inference, return result dict
     """
 
-    def __init__(self, name: str):
+    def __init__(self, name: str) -> None:
+        """Initialize lifecycle state for one lazily loaded model.
+
+        Args:
+            name: Stable engine name exposed by health and unload responses.
+        """
         self.name = name
         self.state: ModelState = ModelState.NOT_LOADED
-        self.state_lock = asyncio.Lock()
-        self.inference_lock = asyncio.Lock()
+        self.operation_lock = asyncio.Lock()
         self.last_activity: float = time.monotonic()
         self.gpu_id: Optional[int] = None
 
@@ -125,104 +135,140 @@ class ModelEngine(abc.ABC):
                         torch.cuda.ipc_collect()
 
     async def ensure_loaded(self) -> None:
-        """Double-check locking lazy load."""
-        async with self.state_lock:
-            if self.state == ModelState.LOADED:
-                return
-            logger.info(f"[{self.name}] {self.state.value} -> LOADING")
-            self.state = ModelState.LOADING
-            try:
-                await asyncio.to_thread(self._load_impl)
-                self.state = ModelState.LOADED
-                logger.info(f"[{self.name}] LOADING -> LOADED")
-            except Exception as e:
-                gpu_id = self.gpu_id
-                with suppress(Exception):
-                    self._unload_impl()
-                self.gpu_id = None
-                self._clear_cuda_cache(gpu_id)
+        """Load the model while holding the lifecycle operation lock."""
+        async with self.operation_lock:
+            await self._ensure_loaded_locked()
 
-                self.state = ModelState.NOT_LOADED
-                logger.error(f"[{self.name}] Failed to load: {e}")
-                raise RuntimeError(f"Failed to load {self.name}: {e}") from e
+    async def _ensure_loaded_locked(self) -> None:
+        """Load the model if needed while the caller holds ``operation_lock``.
 
-    async def ensure_unloaded(self) -> None:
-        """Unload if loaded and no inference is running. Safe to call from any state."""
-        async with self.state_lock:
-            if self.state != ModelState.LOADED or self.inference_lock.locked():
-                return
+        Raises:
+            RuntimeError: If the model implementation cannot be loaded.
 
-            elapsed = time.monotonic() - self.last_activity
-            logger.info(f"[{self.name}] Unloading (idle {elapsed:.0f}s)")
-            self.state = ModelState.UNLOADING
+        Note:
+            The caller must hold ``operation_lock``.
+        """
+        if self.state == ModelState.LOADED:
+            return
 
+        logger.info(f"[{self.name}] {self.state.value} -> LOADING")
+        self.state = ModelState.LOADING
+        try:
+            await asyncio.to_thread(self._load_impl)
+            self.state = ModelState.LOADED
+            logger.info(f"[{self.name}] LOADING -> LOADED")
+        except Exception as error:
             gpu_id = self.gpu_id
+            with suppress(Exception):
+                self._unload_impl()
             self.gpu_id = None
-            mem_before = (
-                torch.cuda.memory_allocated(gpu_id) / (1024**3)
-                if gpu_id is not None
-                else None
+            self._clear_cuda_cache(gpu_id)
+
+            self.state = ModelState.NOT_LOADED
+            logger.error(f"[{self.name}] Failed to load: {error}")
+            raise RuntimeError(f"Failed to load {self.name}: {error}") from error
+
+    async def ensure_unloaded(self) -> bool:
+        """Wait for the current model operation and unload the model.
+
+        Returns:
+            True if this call unloaded a model, or False if it was not loaded.
+        """
+        async with self.operation_lock:
+            return self._ensure_unloaded_locked()
+
+    def _ensure_unloaded_locked(self) -> bool:
+        """Unload the model while the caller holds ``operation_lock``.
+
+        Returns:
+            True if this call unloaded a model, or False if it was not loaded.
+
+        Note:
+            The caller must hold ``operation_lock``.
+        """
+        if self.state == ModelState.NOT_LOADED:
+            return False
+
+        elapsed = time.monotonic() - self.last_activity
+        logger.info(f"[{self.name}] Unloading (idle {elapsed:.0f}s)")
+        self.state = ModelState.UNLOADING
+
+        gpu_id = self.gpu_id
+        mem_before = (
+            torch.cuda.memory_allocated(gpu_id) / (1024**3)
+            if gpu_id is not None
+            else None
+        )
+
+        try:
+            self._unload_impl()
+        finally:
+            self.gpu_id = None
+            self._clear_cuda_cache(gpu_id)
+            self.state = ModelState.NOT_LOADED
+
+        if gpu_id is not None and mem_before is not None:
+            mem_after = torch.cuda.memory_allocated(gpu_id) / (1024**3)
+            freed = mem_before - mem_after
+            logger.info(
+                f"[{self.name}] Unloaded from GPU {gpu_id} "
+                f"(freed {freed:.2f}GB, now {mem_after:.2f}GB)"
             )
 
-            try:
-                self._unload_impl()
-            except Exception as e:
-                logger.error(f"[{self.name}] Unload failed: {e}")
-            finally:
-                self._clear_cuda_cache(gpu_id)
-                self.state = ModelState.NOT_LOADED
+        return True
 
-            if gpu_id is not None and mem_before is not None:
-                mem_after = torch.cuda.memory_allocated(gpu_id) / (1024**3)
-                freed = mem_before - mem_after
-                logger.info(
-                    f"[{self.name}] Unloaded from GPU {gpu_id} "
-                    f"(freed {freed:.2f}GB, now {mem_after:.2f}GB)"
-                )
+    async def run_inference(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        """Load the model and run one serialized inference operation.
 
-    async def run_inference(self, *args, **kwargs) -> Dict[str, Any]:
-        """Standard inference pattern: touch -> ensure -> lock -> thread -> touch."""
+        Args:
+            *args: Positional values forwarded to the model implementation.
+            **kwargs: Keyword values forwarded to the model implementation.
+
+        Returns:
+            The inference result or a structured load or inference error.
+        """
         self.last_activity = time.monotonic()
-        try:
-            await self.ensure_loaded()
-        except Exception as e:
-            return {
-                "status": "error",
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "http_status": 503,
-            }
+        async with self.operation_lock:
+            try:
+                await self._ensure_loaded_locked()
+            except Exception as error:
+                return {
+                    "status": "error",
+                    "error": str(error),
+                    "error_type": type(error).__name__,
+                    "http_status": 503,
+                }
 
-        oom_detected = False
-        try:
-            async with self.inference_lock:
+            oom_detected = False
+            try:
                 result = await asyncio.to_thread(
                     self._run_inference_impl, *args, **kwargs
                 )
-        except Exception as e:
-            logger.error(f"[{self.name}] Inference failed: {e}")
-            oom_detected = self._is_cuda_oom(e)
-            result = {
-                "status": "error",
-                "error": str(e),
-                "error_type": type(e).__name__,
-            }
-        finally:
-            self.last_activity = time.monotonic()
-            self._clear_cuda_cache(self.gpu_id)
+            except Exception as error:
+                logger.error(f"[{self.name}] Inference failed: {error}")
+                oom_detected = self._is_cuda_oom(error)
+                result = {
+                    "status": "error",
+                    "error": str(error),
+                    "error_type": type(error).__name__,
+                }
+            finally:
+                self.last_activity = time.monotonic()
+                self._clear_cuda_cache(self.gpu_id)
 
-        if result.get("status") == "error" and self._is_cuda_oom(
-            result.get("error", "")
-        ):
-            oom_detected = True
+            if result.get("status") == "error" and self._is_cuda_oom(
+                result.get("error", "")
+            ):
+                oom_detected = True
 
-        if oom_detected:
-            logger.warning(
-                f"[{self.name}] CUDA OOM detected; unloading model to recover memory"
-            )
-            await self.ensure_unloaded()
+            if oom_detected:
+                logger.warning(
+                    f"[{self.name}] CUDA OOM detected; "
+                    "unloading model to recover memory"
+                )
+                self._ensure_unloaded_locked()
 
-        return result
+            return result
 
     def should_idle_unload(self, idle_timeout: int) -> bool:
         if self.state != ModelState.LOADED:
@@ -278,6 +324,11 @@ class BaseFastAPIServer(abc.ABC):
     # App creation
     # ------------------------------------------------------------------
     def _create_app(self) -> FastAPI:
+        """Create the FastAPI application with shared lifecycle routes.
+
+        Returns:
+            The application used by this model server.
+        """
         app = FastAPI(
             title=f"{self.__class__.__name__}",
             description=f"{self.__class__.__name__} with engines: {', '.join(e.name for e in self._engines)}",
@@ -288,6 +339,21 @@ class BaseFastAPIServer(abc.ABC):
         @app.get("/health", response_model=HealthResponse)
         async def health():
             return self._build_health_dict()
+
+        @app.post("/unload", response_model=UnloadResponse)
+        async def unload() -> UnloadResponse:
+            """Unload every model engine after its active operation finishes."""
+            unloaded = {}
+            for engine in self._engines:
+                unloaded[engine.name] = await engine.ensure_unloaded()
+
+            return UnloadResponse(
+                status="ok",
+                unloaded=unloaded,
+                model_state={
+                    engine.name: engine.state.value for engine in self._engines
+                },
+            )
 
         return app
 

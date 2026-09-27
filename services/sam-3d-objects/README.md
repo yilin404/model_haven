@@ -44,17 +44,19 @@ uv run main.py --host 0.0.0.0 --port 8005 --idle-timeout 600
 
 ```json
 {
-  "image": "<base64 编码的 RGBA 图片>",
+  "image": "<base64 编码的 RGB 图片>",
   "mask": "<base64 编码的灰度掩码图片>",
   "seed": 42
 }
 ```
 
-- `image`：base64 编码的 RGBA 图片
+- `image`：base64 编码的 RGB 图片；如需围绕目标裁剪，应由客户端在发送请求前完成
 - `mask`：base64 编码的灰度掩码图片
 - `seed`（可选）：随机种子，默认 42
 
 > 注意：`image` 和 `mask` 尺寸必须一致。
+
+> 服务端不会计算 bbox，也不会裁剪、缩放或改变输入宽高比。对于场景生成流程，tight bbox 与 margin 应由 SceneParser 等上游模块决定；服务只重建客户端提交的 RGB 与 mask。
 
 ## 成功响应
 

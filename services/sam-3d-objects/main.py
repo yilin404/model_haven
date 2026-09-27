@@ -3,7 +3,7 @@
 SAM 3D Objects FastAPI Server - Single Image to 3D Reconstruction Service
 
 A FastAPI-based server that wraps Meta's SAM 3D Objects model for single-image
-3D object reconstruction, producing Gaussian splat PLY files.
+3D object reconstruction, producing Gaussian splat PLY and textured GLB files.
 """
 
 import argparse
@@ -26,6 +26,7 @@ from omegaconf import OmegaConf
 from hydra.utils import instantiate
 
 import sam3d_objects  # noqa: F401 — registers modules needed by hydra instantiate
+from glb_postprocessing import build_textured_glb
 from sam3d_objects.pipeline.inference_pipeline_pointmap import InferencePipelinePointMap
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -94,6 +95,18 @@ class SAM3DObjectsEngine(ModelEngine):
         self.pipeline: Optional[InferencePipelinePointMap] = None
 
     def _load_impl(self) -> None:
+        """Load the SAM3D pipeline without permanently casting models to FP16.
+
+        The checkpoint and pipeline retain their configured dtypes while the
+        existing gsplat observation patch and nvdiffrast texture optimizer stay
+        active.
+
+        Raises:
+            RuntimeError: If no usable CUDA device or model checkpoint exists.
+
+        Note:
+            This method selects and activates a process-local CUDA device.
+        """
         self.gpu_id = select_free_gpu()
         torch.cuda.set_device(self.gpu_id)
         _patch_render_multiview_gsplat()
@@ -107,10 +120,6 @@ class SAM3DObjectsEngine(ModelEngine):
         config.workspace_dir = os.path.dirname(abs_config)
 
         self.pipeline = instantiate(config)
-        self.pipeline.models["ss_generator"].half()
-        for embedder in self.pipeline.condition_embedders.values():
-            embedder.half()
-        logger.info("Converted ss_generator and condition embedders to FP16")
 
     def _unload_impl(self) -> None:
         if self.pipeline is not None:
@@ -123,6 +132,24 @@ class SAM3DObjectsEngine(ModelEngine):
         mask: PILImage.Image,
         seed: Optional[int],
     ) -> Dict[str, Any]:
+        """Reconstruct one object and serialize its Gaussian and textured mesh.
+
+        Args:
+            image: Client-prepared RGB image. Cropping and margin selection are
+                intentionally owned by the caller.
+            mask: Grayscale object mask with the same width and height as
+                ``image``.
+            seed: Optional SAM3D sampling seed.
+
+        Returns:
+            Service result containing base64 PLY and GLB payloads plus pose,
+            scale, timing, and file-size metadata. Inference failures are
+            returned as an error result instead of being raised.
+
+        Note:
+            The method activates the engine's CUDA device and performs GPU
+            inference and texture optimization synchronously.
+        """
         torch.cuda.set_device(self.gpu_id)
 
         logger.info(
@@ -135,20 +162,22 @@ class SAM3DObjectsEngine(ModelEngine):
                 image,
                 mask,
                 seed,
-                with_mesh_postprocess=True,
-                with_texture_baking=True,
+                with_mesh_postprocess=False,
+                with_texture_baking=False,
                 with_layout_postprocess=True,
-                use_vertex_color=False,
+                use_vertex_color=True,
+                decode_formats=["mesh", "gaussian"],
             )
-            generation_time = time.time() - start_time
+            textured_glb = build_textured_glb(output)
 
             ply_buffer = io.BytesIO()
             output["gs"].save_ply(ply_buffer)
             ply_bytes = ply_buffer.getvalue()
 
             glb_buffer = io.BytesIO()
-            output["glb"].export(glb_buffer, file_type="glb")
+            textured_glb.export(glb_buffer, file_type="glb")
             glb_bytes = glb_buffer.getvalue()
+            generation_time = time.time() - start_time
 
             rotation = output["rotation"].cpu().numpy().tolist()
             translation = output["translation"].cpu().numpy().tolist()
@@ -186,7 +215,7 @@ class GenerateRequest(BaseModel):
 
     image: PILImage.Image = Field(
         ...,
-        description="Base64-encoded image string and will be decoded to PILImage.Image",
+        description="Base64-encoded RGB image prepared by the client",
     )
     mask: PILImage.Image = Field(
         ...,
@@ -206,7 +235,7 @@ class GenerateRequest(BaseModel):
         except Exception as e:
             raise ValueError(f"Image must be valid base64-encoded data: {e}")
         try:
-            return PILImage.open(io.BytesIO(raw)).convert("RGBA")
+            return PILImage.open(io.BytesIO(raw)).convert("RGB")
         except Exception as e:
             raise ValueError(f"Image data is not a valid image format: {e}")
 

@@ -24,6 +24,16 @@ logger = logging.getLogger(__name__)
 
 
 # ===========================================================================
+# Shared defaults
+# ===========================================================================
+# Single source of truth for the idle-unload policy: every service's
+# --idle-timeout / --idle-check-interval argparse defaults and the
+# BaseFastAPIServer constructor defaults reference these constants.
+DEFAULT_IDLE_TIMEOUT = 1800  # seconds idle before auto-unload
+DEFAULT_IDLE_CHECK_INTERVAL = 60  # seconds between idle checks
+
+
+# ===========================================================================
 # Shared types
 # ===========================================================================
 class ModelState(str, enum.Enum):
@@ -302,8 +312,8 @@ class BaseFastAPIServer(abc.ABC):
         engines: list[ModelEngine],
         host: str = "0.0.0.0",
         port: int = 8000,
-        idle_timeout: int = 300,
-        idle_check_interval: int = 30,
+        idle_timeout: int = DEFAULT_IDLE_TIMEOUT,
+        idle_check_interval: int = DEFAULT_IDLE_CHECK_INTERVAL,
     ):
         self._engines = engines
         self.host = host

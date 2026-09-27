@@ -134,7 +134,13 @@ uv run main.py --host 0.0.0.0 --port <port>
 
 ```python
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from common import BaseFastAPIServer, ModelEngine, select_free_gpu
+from common import (
+    BaseFastAPIServer,
+    DEFAULT_IDLE_CHECK_INTERVAL,
+    DEFAULT_IDLE_TIMEOUT,
+    ModelEngine,
+    select_free_gpu,
+)
 
 class XxxEngine(ModelEngine):
     def __init__(self, model_path: str):
@@ -182,8 +188,10 @@ def main():
     parser = argparse.ArgumentParser(description="Xxx FastAPI Server")
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--idle-timeout", type=int, default=300)
-    parser.add_argument("--idle-check-interval", type=int, default=30)
+    parser.add_argument("--idle-timeout", type=int, default=DEFAULT_IDLE_TIMEOUT)
+    parser.add_argument(
+        "--idle-check-interval", type=int, default=DEFAULT_IDLE_CHECK_INTERVAL
+    )
     parser.add_argument("--log-level", type=str, default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
@@ -211,7 +219,7 @@ if __name__ == "__main__":
   "gpu": "NVIDIA RTX 4090",
   "gpu_memory_allocated_gb": 0.0,
   "gpu_memory_reserved_gb": 0.0,
-  "idle_timeout": 300
+  "idle_timeout": 1800
 }
 ```
 

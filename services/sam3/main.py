@@ -44,7 +44,13 @@ from sam3.train.data.collator import collate_fn_api
 from sam3.model.utils.misc import copy_data_to_device
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from common import BaseFastAPIServer, ModelEngine, select_free_gpu
+from common import (
+    BaseFastAPIServer,
+    DEFAULT_IDLE_CHECK_INTERVAL,
+    DEFAULT_IDLE_TIMEOUT,
+    ModelEngine,
+    select_free_gpu,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -505,8 +511,6 @@ class Sam3Server(BaseFastAPIServer):
 
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8004
-DEFAULT_IDLE_TIMEOUT = 300
-DEFAULT_IDLE_CHECK_INTERVAL = 30
 
 
 def main():

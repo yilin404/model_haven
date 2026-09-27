@@ -66,8 +66,8 @@ bash scripts/start-services.sh --depth-anything-v3:8006
 | `--host` | `0.0.0.0` | 服务绑定地址 |
 | `--port` | `8006` | 监听端口 |
 | `--model-name` | `depth-anything/DA3-LARGE-1.1` | Hugging Face repo id 或本地模型目录 |
-| `--idle-timeout` | `300` | 空闲多久后卸载模型 |
-| `--idle-check-interval` | `30` | 空闲检查间隔 |
+| `--idle-timeout` | `1800` | 空闲多久后卸载模型 |
+| `--idle-check-interval` | `60` | 空闲检查间隔 |
 | `--log-level` | `INFO` | 日志级别 |
 
 ## Interface

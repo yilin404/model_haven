@@ -35,8 +35,8 @@ uv run main.py --host 0.0.0.0 --port 8008 --idle-timeout 600
 | `--port` | `8008` | 监听端口 |
 | `--hf-repo` | `tencent/Hunyuan3D-Part` | P3-SAM checkpoint 所在 HF 仓库 |
 | `--ckpt-filename` | `p3sam/p3sam.safetensors` | checkpoint 在仓库内的文件名 |
-| `--idle-timeout` | `300` | 空闲超时秒数（超时自动卸载模型） |
-| `--idle-check-interval` | `30` | 空闲检查间隔秒数 |
+| `--idle-timeout` | `1800` | 空闲超时秒数（超时自动卸载模型） |
+| `--idle-check-interval` | `60` | 空闲检查间隔秒数 |
 | `--log-level` | `INFO` | 日志级别 |
 
 ## API 端点

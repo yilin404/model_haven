@@ -30,8 +30,8 @@ uv run main.py --host 0.0.0.0 --port 8004 --idle-timeout 600
 | `--host` | `0.0.0.0` | 服务绑定地址 |
 | `--port` | `8004` | 监听端口 |
 | `--checkpoint-path` | `./checkpoints/sam3.pt` | 模型检查点路径 |
-| `--idle-timeout` | `300` | 空闲超时秒数 |
-| `--idle-check-interval` | `30` | 空闲检查间隔秒数 |
+| `--idle-timeout` | `1800` | 空闲超时秒数 |
+| `--idle-check-interval` | `60` | 空闲检查间隔秒数 |
 | `--log-level` | `INFO` | 日志级别 |
 
 ## API 端点

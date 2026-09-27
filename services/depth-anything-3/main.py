@@ -21,7 +21,13 @@ from PIL import Image as PILImage
 from pydantic import BaseModel, Field, model_validator
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from common import BaseFastAPIServer, ModelEngine, select_free_gpu
+from common import (
+    BaseFastAPIServer,
+    DEFAULT_IDLE_CHECK_INTERVAL,
+    DEFAULT_IDLE_TIMEOUT,
+    ModelEngine,
+    select_free_gpu,
+)
 from serialization import NDArrayData
 
 logger = logging.getLogger(__name__)
@@ -283,8 +289,6 @@ class DepthAnythingV3Server(BaseFastAPIServer):
 
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8006
-DEFAULT_IDLE_TIMEOUT = 300
-DEFAULT_IDLE_CHECK_INTERVAL = 30
 
 
 def build_parser() -> argparse.ArgumentParser:

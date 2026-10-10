@@ -18,17 +18,11 @@ uv pip install "setuptools<81"
 # Install sam3d_objects core dependencies (without [dev] — dev tools only)
 # --no-build-isolation: use current venv instead of isolated build env (avoids chasing undeclared build deps)
 # --index-strategy unsafe-best-match: allow cross-index version matching (cuda-python etc.)
-uv pip install --no-build-isolation -e ../../deps/sam-3d-objects \
-  --extra-index-url https://pypi.ngc.nvidia.com \
-  --extra-index-url https://download.pytorch.org/whl/cu121 \
-  --index-strategy unsafe-best-match
+uv pip install --no-build-isolation -e '../../deps/sam-3d-objects[dev]'
 
 # Install pytorch3d (separate step — upstream has broken torch dependency)
 # --force-reinstall --no-cache: must recompile against current torch to match ABI
-uv pip install --no-build-isolation --force-reinstall --no-cache -e '../../deps/sam-3d-objects[p3d]' \
-  --extra-index-url https://pypi.ngc.nvidia.com \
-  --extra-index-url https://download.pytorch.org/whl/cu121 \
-  --index-strategy unsafe-best-match
+uv pip install --no-build-isolation -e '../../deps/sam-3d-objects[p3d]'
 
 # Install inference dependencies (kaolin needs special find-links URL)
 uv pip install --no-build-isolation -e '../../deps/sam-3d-objects[inference]' \

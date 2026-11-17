@@ -118,6 +118,11 @@ class Sam3Engine(ModelEngine):
         # otherwise survive after the model references above are released.
         torch.clear_autocast_cache()
 
+        # Return the cached allocator blocks to the driver; without this the
+        # caching allocator keeps gigabytes reserved even after the model is
+        # released, starving a later FLUX reload on single-GPU hosts.
+        torch.cuda.empty_cache()
+
     @staticmethod
     def _encode_mask_as_png(mask_bool: np.ndarray) -> str:
         mask_uint8 = (mask_bool.squeeze().astype(np.uint8)) * 255
